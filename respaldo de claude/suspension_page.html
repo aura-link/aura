@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Servicio Suspendido</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 15px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            max-width: 500px;
+            padding: 40px;
+            text-align: center;
+            animation: slideUp 0.5s ease-out;
+        }
+
+        @keyframes slideUp {
+            from {
+                opacity: 0;
+                transform: translateY(30px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .warning-icon {
+            font-size: 80px;
+            margin-bottom: 20px;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.1); }
+        }
+
+        h1 {
+            color: #d63031;
+            font-size: 32px;
+            margin-bottom: 10px;
+            font-weight: 700;
+        }
+
+        .subtitle {
+            color: #666;
+            font-size: 16px;
+            margin-bottom: 30px;
+            font-weight: 300;
+        }
+
+        .message-box {
+            background: #fff3cd;
+            border-left: 4px solid #ffc107;
+            padding: 20px;
+            border-radius: 5px;
+            margin-bottom: 30px;
+            text-align: left;
+        }
+
+        .message-box p {
+            color: #856404;
+            line-height: 1.6;
+            margin-bottom: 10px;
+        }
+
+        .message-box p:last-child {
+            margin-bottom: 0;
+        }
+
+        .contact-info {
+            background: #f8f9fa;
+            padding: 25px;
+            border-radius: 10px;
+            margin-bottom: 30px;
+        }
+
+        .contact-info h3 {
+            color: #333;
+            margin-bottom: 15px;
+            font-size: 18px;
+        }
+
+        .contact-item {
+            margin-bottom: 15px;
+            padding-bottom: 15px;
+            border-bottom: 1px solid #dee2e6;
+        }
+
+        .contact-item:last-child {
+            margin-bottom: 0;
+            padding-bottom: 0;
+            border-bottom: none;
+        }
+
+        .contact-label {
+            color: #666;
+            font-size: 14px;
+            margin-bottom: 5px;
+            font-weight: 600;
+        }
+
+        .contact-value {
+            color: #d63031;
+            font-size: 18px;
+            font-weight: 700;
+        }
+
+        .bank-info {
+            background: #e8f5e9;
+            padding: 20px;
+            border-radius: 10px;
+            margin-bottom: 30px;
+            border-left: 4px solid #4caf50;
+        }
+
+        .bank-info h3 {
+            color: #2e7d32;
+            margin-bottom: 15px;
+            font-size: 16px;
+        }
+
+        .bank-detail {
+            margin-bottom: 10px;
+            text-align: left;
+        }
+
+        .bank-detail label {
+            color: #666;
+            font-size: 13px;
+            display: block;
+            margin-bottom: 3px;
+            font-weight: 600;
+        }
+
+        .bank-detail value {
+            color: #2e7d32;
+            font-size: 15px;
+            font-weight: 700;
+            display: block;
+            font-family: 'Courier New', monospace;
+        }
+
+        .actions {
+            margin-top: 30px;
+        }
+
+        .action-text {
+            color: #666;
+            font-size: 14px;
+            margin-bottom: 15px;
+        }
+
+        .refresh-btn {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 12px 40px;
+            border-radius: 5px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.3s ease;
+        }
+
+        .refresh-btn:hover {
+            background: #764ba2;
+        }
+
+        .footer {
+            margin-top: 30px;
+            padding-top: 20px;
+            border-top: 1px solid #dee2e6;
+            color: #999;
+            font-size: 12px;
+        }
+
+        .status-badge {
+            display: inline-block;
+            background: #d63031;
+            color: white;
+            padding: 8px 15px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            margin-bottom: 15px;
+            text-transform: uppercase;
+        }
+
+        .timer {
+            color: #666;
+            font-size: 13px;
+            margin-top: 20px;
+        }
+
+        .timer strong {
+            color: #d63031;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="status-badge">Estado: Servicio Suspendido</div>
+
+        <div class="warning-icon">⚠️</div>
+
+        <h1>Servicio Suspendido</h1>
+        <p class="subtitle">Tu conexión ha sido suspendida por falta de pago</p>
+
+        <div class="message-box">
+            <p><strong>Por favor revisa tu estado de cuenta.</strong></p>
+            <p>Detectamos que tienes pagos pendientes. Para restaurar tu servicio de internet, debes completar el pago de tu factura vencida.</p>
+        </div>
+
+        <div class="contact-info">
+            <h3>📞 Contactanos</h3>
+            <div class="contact-item">
+                <div class="contact-label">Teléfono / WhatsApp</div>
+                <div class="contact-value">+56 2 3655 099</div>
+            </div>
+            <div class="contact-item">
+                <div class="contact-label">Disponible</div>
+                <div class="contact-value" style="color: #666; font-weight: 400;">Lunes a Viernes: 9:00 - 18:00</div>
+            </div>
+        </div>
+
+        <div class="bank-info">
+            <h3>🏦 Realiza tu Pago</h3>
+            <div class="bank-detail">
+                <label>Banco Destino</label>
+                <value>Cuenta Corriente</value>
+            </div>
+            <div class="bank-detail">
+                <label>Número de Cuenta</label>
+                <value>Solicita el número en el teléfono de arriba</value>
+            </div>
+            <div class="bank-detail">
+                <label>Rut Empresa</label>
+                <value>Confirma con nuestro equipo</value>
+            </div>
+        </div>
+
+        <div class="actions">
+            <p class="action-text">Después de realizar el pago, reporta tu comprobante:</p>
+            <button class="refresh-btn" onclick="location.reload()">Verificar Estado</button>
+        </div>
+
+        <div class="timer">
+            Última actualización: <strong id="timer"></strong>
+        </div>
+
+        <div class="footer">
+            <p>El servicio se restaurará automáticamente una vez confirmos tu pago.</p>
+            <p style="margin-top: 10px; color: #ccc;">Infranet Tomatlan - Servicio de Internet</p>
+        </div>
+    </div>
+
+    <script>
+        // Actualizar timestamp
+        function updateTime() {
+            const now = new Date();
+            const time = now.toLocaleTimeString('es-MX', {
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit'
+            });
+            document.getElementById('timer').textContent = time;
+        }
+
+        updateTime();
+        setInterval(updateTime, 1000);
+
+        // Reintentar verificación cada 30 segundos
+        setInterval(() => {
+            fetch('/api/check-status', { method: 'GET' })
+                .then(response => {
+                    if (response.status === 200) {
+                        location.reload();
+                    }
+                })
+                .catch(e => console.log('Verificando estado...'));
+        }, 30000);
+    </script>
+</body>
+</html>

@@ -1,0 +1,10 @@
+*.log
+*.tmp
+__pycache__/
+.env
+# Sensitive
+wireguard_configs/
+wireguard_configs.zip
+wireguard_oc200.conf
+backup-uisp.unms
+nul

@@ -1,0 +1,17 @@
+[Unit]
+Description=AURALINK Monitor - Telegram Bot para UISP
+After=network.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=uisp
+WorkingDirectory=/home/uisp/auralink_monitor
+ExecStart=/home/uisp/auralink_monitor/bin/python3 /home/uisp/auralink_monitor/auralink_monitor.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

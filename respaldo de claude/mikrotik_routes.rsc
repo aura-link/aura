@@ -1,0 +1,9 @@
+/ip route add dst-address=0.0.0.0/0 gateway=192.168.40.1 routing-mark=to_isp1
+/ip route add dst-address=0.0.0.0/0 gateway=192.169.1.1 routing-mark=to_isp2
+/ip route add dst-address=0.0.0.0/0 gateway=192.168.4.1 routing-mark=to_isp3
+/ip route add dst-address=0.0.0.0/0 gateway=192.168.1.1 routing-mark=to_isp4
+/ip route add dst-address=0.0.0.0/0 gateway=192.168.2.1 routing-mark=to_isp5
+/ip route add dst-address=0.0.0.0/0 gateway=192.168.201.1 routing-mark=to_isp6
+/ip route add dst-address=0.0.0.0/0 gateway=100.64.0.1 routing-mark=to_isp7
+/ip route add dst-address=0.0.0.0/0 gateway=192.168.5.1 routing-mark=to_isp8
+/ip route add dst-address=0.0.0.0/0 gateway=192.168.101.1 routing-mark=to_isp9

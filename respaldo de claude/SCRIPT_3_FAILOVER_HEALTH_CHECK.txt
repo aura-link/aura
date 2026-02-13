@@ -1,0 +1,24 @@
+# SCRIPT 3: CONFIGURAR HEALTH CHECK CON FAILOVER AUTOMÁTICO
+# Pega esto en la terminal SSH del MikroTik
+# Este script configura netwatch para detectar ISPs caídos y desactivar rutas automáticamente
+
+/tool netwatch add host=192.168.40.1 comment="WAN3-Presidencia" interval=10s timeout=3s down-script="/ip route disable [find where dst-address=0.0.0.0/0 && gateway=192.168.40.1]" up-script="/ip route enable [find where dst-address=0.0.0.0/0 && gateway=192.168.40.1]"
+
+/tool netwatch add host=192.169.1.1 comment="WAN4-Presidencia" interval=10s timeout=3s down-script="/ip route disable [find where dst-address=0.0.0.0/0 && gateway=192.169.1.1]" up-script="/ip route enable [find where dst-address=0.0.0.0/0 && gateway=192.169.1.1]"
+
+/tool netwatch add host=192.168.4.1 comment="WAN6-ether4" interval=10s timeout=3s down-script="/ip route disable [find where dst-address=0.0.0.0/0 && gateway=192.168.4.1]" up-script="/ip route enable [find where dst-address=0.0.0.0/0 && gateway=192.168.4.1]"
+
+/tool netwatch add host=192.168.1.1 comment="WAN2-Sergio" interval=10s timeout=3s down-script="/ip route disable [find where dst-address=0.0.0.0/0 && gateway=192.168.1.1]" up-script="/ip route enable [find where dst-address=0.0.0.0/0 && gateway=192.168.1.1]"
+
+/tool netwatch add host=192.168.2.1 comment="WAN5-ether3" interval=10s timeout=3s down-script="/ip route disable [find where dst-address=0.0.0.0/0 && gateway=192.168.2.1]" up-script="/ip route enable [find where dst-address=0.0.0.0/0 && gateway=192.168.2.1]"
+
+/tool netwatch add host=192.168.201.1 comment="WAN1-ether1" interval=10s timeout=3s down-script="/ip route disable [find where dst-address=0.0.0.0/0 && gateway=192.168.201.1]" up-script="/ip route enable [find where dst-address=0.0.0.0/0 && gateway=192.168.201.1]"
+
+/tool netwatch add host=100.64.0.1 comment="WAN9-ether7" interval=10s timeout=3s down-script="/ip route disable [find where dst-address=0.0.0.0/0 && gateway=100.64.0.1]" up-script="/ip route enable [find where dst-address=0.0.0.0/0 && gateway=100.64.0.1]"
+
+/tool netwatch add host=192.168.5.1 comment="WAN8-ether6" interval=10s timeout=3s down-script="/ip route disable [find where dst-address=0.0.0.0/0 && gateway=192.168.5.1]" up-script="/ip route enable [find where dst-address=0.0.0.0/0 && gateway=192.168.5.1]"
+
+/tool netwatch add host=192.168.101.1 comment="WAN7-ether5" interval=10s timeout=3s down-script="/ip route disable [find where dst-address=0.0.0.0/0 && gateway=192.168.101.1]" up-script="/ip route enable [find where dst-address=0.0.0.0/0 && gateway=192.168.101.1]"
+
+# Verificar que los health checks se crearon
+/tool netwatch print

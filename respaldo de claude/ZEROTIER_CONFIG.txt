@@ -1,0 +1,37 @@
+# CONFIGURACIÓN ZEROTIER EN MIKROTIK
+
+Ejecuta estos comandos en la terminal SSH del MikroTik (línea por línea):
+
+## PASO 1: Habilitar ZeroTier
+/interface zerotier enable 0
+
+## PASO 2: Conectar a tu red ZeroTier
+/interface zerotier interface add network=9f77fc393ecd131f
+
+## PASO 3: Verificar que está conectado
+/interface zerotier print
+/interface zerotier interface print
+
+## RESULTADO ESPERADO:
+Deberías ver:
+- Interfaz zt0 habilitada
+- Interfaz zt1 con tu red 9f77fc393ecd131f
+
+---
+
+UNA VEZ HECHO:
+
+1. Ve a https://my.zerotier.com
+2. Login con tu cuenta
+3. Ve a tu red 9f77fc393ecd131f
+4. Busca el MikroTik en la lista de miembros
+5. **Autoriza** el dispositivo (checkmark en la columna "Auth")
+6. Anota la IP asignada al MikroTik (ejemplo: 172.22.x.x)
+
+---
+
+LUEGO me avisas:
+- ¿Está conectado el MikroTik en ZeroTier?
+- ¿Cuál es su IP asignada en ZeroTier? (172.22.x.x)
+
+Con eso podré conectarme directamente sin limitaciones de SSH.

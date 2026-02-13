@@ -1,0 +1,4 @@
+# SCRIPT 1: DESHABILITAR WAN10
+# Ya hecho, pero aquí para referencia
+
+/ip firewall mangle disable 12,22,32,41

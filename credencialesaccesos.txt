@@ -1,0 +1,35 @@
+Conexión SSH via Zerotier
+
+Servidor Aura
+10.147.17.155
+Usuario: aura
+contraseña login y sudo: 1234
+
+Nuevo Servidor UISP
+10.147.17.243
+Usuario: uisp
+contraseña login y sudo: 1234
+
+Balanceador
+10.147.17.11
+Usuario: admin
+contraseña: 1234
+
+MK La Gloria
+10.144.247.27
+Usuario: admin
+contraseña: Izan2021
+
+Credenciales antenas ubiquiti de red AURALINK
+
+1- opción
+usuario: ubnt
+contraseña: Casimposible*7719Varce*1010
+
+2- opción
+usuario: AURALINK
+contraseña: Auralink2021
+
+3- opción
+usuario: ubnt
+contraseña: Auralink2021
