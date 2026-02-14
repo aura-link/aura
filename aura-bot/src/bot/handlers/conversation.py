@@ -1,0 +1,97 @@
+"""Handler para mensajes libres → Claude AI con pre-filtro y rate limiting."""
+
+from telegram import Update
+from telegram.ext import ContextTypes
+from src.bot.roles import get_role, Role
+from src.utils.filter import is_relevant, REJECTION_MESSAGE
+from src.utils.logger import log
+
+# Limite de consultas AI por dia para clientes/guests
+DAILY_AI_LIMIT = 15
+
+
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Procesa mensajes de texto libre con 3 capas de proteccion."""
+    user = update.effective_user
+    message = update.message
+    if not user or not message or not message.text:
+        return
+
+    text = message.text.strip()
+    if not text:
+        return
+
+    db = context.bot_data["db"]
+    claude = context.bot_data.get("claude")
+
+    if not claude or not claude.enabled:
+        await message.reply_text(
+            "💬 Por ahora solo puedo atender comandos.\n"
+            "Usa /help para ver que puedo hacer."
+        )
+        return
+
+    # Determine role
+    link = await db.get_customer_link(user.id)
+    role = get_role(user.id, is_linked=link is not None)
+
+    # === CAPA 1: Pre-filtro local (solo para clientes/guests, admins pasan libre) ===
+    if role != Role.ADMIN and not is_relevant(text):
+        log.info("Mensaje filtrado (no relevante) de user %d: %s", user.id, text[:50])
+        await message.reply_text(REJECTION_MESSAGE, parse_mode="Markdown")
+        return
+
+    # === CAPA 2: Rate limiting (solo para clientes/guests, admins sin limite) ===
+    if role != Role.ADMIN:
+        usage = await db.get_ai_usage_today(user.id)
+        if usage >= DAILY_AI_LIMIT:
+            log.info("Rate limit alcanzado para user %d: %d/%d", user.id, usage, DAILY_AI_LIMIT)
+            await message.reply_text(
+                f"⚠️ Has alcanzado el limite de {DAILY_AI_LIMIT} consultas por hoy.\n\n"
+                "Puedes seguir usando los comandos directos:\n"
+                "💰 /misaldo — Tu saldo\n"
+                "📡 /miservicio — Tu servicio\n"
+                "📶 /miconexion — Diagnostico\n"
+                "🆘 /soporte — Hablar con un tecnico\n\n"
+                "El limite se renueva mañana."
+            )
+            return
+
+    # === CAPA 3: Claude AI (con system prompt que refuerza el enfoque) ===
+    role_str = role.value
+    client_name = link["crm_client_name"] if link else None
+    client_id = link["crm_client_id"] if link else None
+
+    user_context = {
+        "telegram_user_id": user.id,
+        "telegram_username": user.username,
+        "client_id": client_id,
+    }
+
+    # Get conversation history
+    history = await db.get_history(user.id)
+
+    # Send typing indicator
+    await context.bot.send_chat_action(chat_id=message.chat_id, action="typing")
+
+    # Call Claude
+    response = await claude.chat(
+        user_message=text,
+        history=history,
+        role=role_str,
+        client_name=client_name,
+        client_id=client_id,
+        user_context=user_context,
+    )
+
+    # Save to history
+    await db.add_message(user.id, "user", text)
+    await db.add_message(user.id, "assistant", response)
+
+    # Send response (split if too long)
+    if len(response) <= 4096:
+        await message.reply_text(response)
+    else:
+        for i in range(0, len(response), 4096):
+            chunk = response[i : i + 4096]
+            await message.reply_text(chunk)

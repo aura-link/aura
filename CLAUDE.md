@@ -139,15 +139,79 @@ wss://server.auralink.link:443+sBRaeWB1kiH4cxBIWmBTEyuxIIeULvidfT3s7UXpR2ZbapIV+
 - SSL config template: `templates/snippets/ssl-cert.conf`
 - Actualmente: `ssl_protocols TLSv1.2;` (solo TLS 1.2)
 
+## Aura Bot - Agente IA Telegram
+
+### Ubicacion
+- **Directorio**: `C:\claude2\aura-bot\`
+- **Bot Telegram**: @auralinkmonitor_bot (ID: 8318058273)
+- **Admin Telegram**: Carlos Eduardo Valenzuela Rios (ID: 1900491583)
+
+### Stack
+- Python 3.13 + python-telegram-bot 21.9 + Anthropic SDK + aiohttp + librouteros + aiosqlite + rapidfuzz
+- Claude Sonnet 4 para respuestas IA (~$0.02/consulta, ~$18 USD/mes estimado con 30 consultas/dia)
+
+### Integraciones funcionando
+- **UISP NMS**: dispositivos, sitios, outages (API v2.1 con token)
+- **UISP CRM**: clientes, servicios, facturas, saldos
+- **MikroTik**: sesiones PPPoE, ping (RouterOS API puerto 8728 via librouteros)
+- **Claude AI**: tool use con 9 herramientas, system prompt dinamico por rol
+
+### Proteccion de costos (3 capas)
+1. **Pre-filtro local** (`src/utils/filter.py`): keywords relevantes a ISP, rechaza mensajes off-topic sin llamar API
+2. **Rate limiting**: 15 consultas AI/dia por cliente (admins sin limite)
+3. **System prompt**: instruye a Claude responder breve y rechazar temas no relacionados
+
+### Comandos implementados
+| Rol | Comandos |
+|-----|----------|
+| Cliente | /misaldo, /miservicio, /miconexion, /reportar, /soporte, /vincular |
+| Admin | /red, /clientes, /buscar, /dispositivos, /pppoe, /diagnostico, /caidas |
+| Todos | /start, /help, /menu + mensajes libres en español via Claude AI |
+
+### Archivos clave del bot
+| Archivo | Funcion |
+|---------|---------|
+| `src/main.py` | Entry point |
+| `src/config.py` | Carga .env |
+| `src/bot/app.py` | Telegram Application + handlers |
+| `src/bot/handlers/conversation.py` | Mensajes libres → Claude AI (con filtro + rate limit) |
+| `src/ai/claude_client.py` | Anthropic SDK wrapper con tool use loop |
+| `src/ai/system_prompt.py` | System prompt dinamico por rol |
+| `src/ai/tools.py` | 9 tool definitions para Claude |
+| `src/ai/tool_executor.py` | Despacha tool calls → UISP/MikroTik |
+| `src/integrations/uisp_nms.py` | UISP NMS client |
+| `src/integrations/uisp_crm.py` | UISP CRM client |
+| `src/integrations/mikrotik.py` | MikroTik RouterOS API |
+| `src/utils/filter.py` | Pre-filtro de relevancia |
+
+### Ejecucion
+- **Local**: `cd aura-bot && PYTHONPATH=. python -m src.main`
+- **Docker**: `docker compose up -d --build`
+- **Python correcto en Windows**: `"/c/Users/eduar/AppData/Local/Microsoft/WindowsApps/python3.13.exe"`
+
+### Estado del bot (2026-02-14)
+- ✅ Botones inline funcionando
+- ✅ Claude AI responde con datos reales de UISP y MikroTik
+- ✅ Consulta de saldos, dispositivos offline, sesiones PPPoE
+- ✅ Pre-filtro y rate limiting implementados
+- ⚠️ Pendiente: pruebas de diferenciacion admin vs cliente (system prompt reforzado, falta probar)
+- ⚠️ Pendiente: deploy en VPS con Docker
+- ⚠️ Pendiente: Haiku da error 529 (overloaded), usando Sonnet por ahora
+
 ## Pendientes
 
 - [ ] Asignar ~170+ antenas de clientes a sus suscriptores CRM (manual por el usuario)
 - [ ] Revisar antenas 10.10.1.45 y 10.10.1.162 (fallaron SSH)
 - [ ] Revisar 5 dispositivos en estado "unknown"
-- [ ] Agente IA para UISP (Telegram Bot + Python, deferred)
+- [x] Agente IA para UISP (Telegram Bot + Python) — implementado como Aura Bot
 - [ ] ~60 dispositivos desconectados que deberían reconectarse gradualmente
+- [ ] Deploy Aura Bot en VPS (Docker)
+- [ ] Probar diferenciacion admin/cliente en system prompt
+- [ ] Probar vinculacion de clientes (/vincular con fuzzy matching)
+- [ ] Renombrar bot en BotFather a "Aura - AURALINK"
 
-## Estado Actual (2026-02-13)
+## Estado Actual (2026-02-14)
 - **213 dispositivos** en UISP (148 activos, 60 desconectados, 5 unknown)
 - **0 unauthorized** (todos autorizados)
 - **SSH sin contraseña** configurado para VPS, Aura y MikroTik
+- **Aura Bot** funcionando localmente con Claude AI + UISP + MikroTik
