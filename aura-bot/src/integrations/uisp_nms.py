@@ -56,6 +56,11 @@ class UispNmsClient(BaseClient):
                 return d
         return None
 
+    async def get_devices_fresh(self) -> list[dict]:
+        """Obtiene dispositivos sin cache (para monitor)."""
+        data = await self.get("/devices")
+        return data if isinstance(data, list) else []
+
     # -- Sites --
 
     async def get_sites(self) -> list[dict]:
@@ -66,6 +71,11 @@ class UispNmsClient(BaseClient):
         result = data if isinstance(data, list) else []
         self._cache.set("sites", result)
         return result
+
+    async def get_sites_fresh(self) -> list[dict]:
+        """Obtiene sitios sin cache (para zone mapper)."""
+        data = await self.get("/sites")
+        return data if isinstance(data, list) else []
 
     # -- Outages --
 

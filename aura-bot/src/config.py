@@ -48,3 +48,9 @@ DB_PATH: str = os.getenv("DB_PATH", "data/aura.db")
 MAX_CONVERSATION_HISTORY: int = 20
 API_TIMEOUT: int = 30
 CACHE_TTL: int = 60  # segundos
+
+# Monitoreo proactivo
+MONITOR_ENABLED: bool = os.getenv("MONITOR_ENABLED", "true").lower() == "true"
+MONITOR_INTERVAL: int = int(os.getenv("MONITOR_INTERVAL", "120"))  # segundos entre polls
+NOTIFICATION_COOLDOWN: int = int(os.getenv("NOTIFICATION_COOLDOWN", "1800"))  # 30 min anti-spam
+ZONE_REFRESH_INTERVAL: int = int(os.getenv("ZONE_REFRESH_INTERVAL", "900"))  # 15 min rebuild zonas

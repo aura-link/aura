@@ -5,6 +5,7 @@ def build_system_prompt(
     role: str = "guest",
     client_name: str | None = None,
     client_id: str | None = None,
+    active_incidents: list[dict] | None = None,
 ) -> str:
     base = (
         "Eres Aura, la asistente virtual de AURALINK, un proveedor de internet (WISP) "
@@ -55,5 +56,16 @@ def build_system_prompt(
         "- Cobertura: Tomatlan, Jalisco y alrededores\n"
         "- Tecnologia: Radio enlace con antenas Ubiquiti\n"
     )
+
+    if active_incidents:
+        base += "\n⚠️ INCIDENTES ACTIVOS EN LA RED:\n"
+        for inc in active_incidents:
+            zone = inc.get("site_name", "Desconocida")
+            affected = inc.get("affected_clients", 0)
+            base += f"- Zona: {zone} ({affected} clientes afectados)\n"
+        base += (
+            "Si un cliente pregunta por problemas de conexion, primero verifica si "
+            "esta en una zona afectada antes de hacer diagnosticos individuales.\n"
+        )
 
     return base

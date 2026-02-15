@@ -36,7 +36,12 @@ HELP_ADMIN = (
     "📡 /dispositivos — Dispositivos offline\n"
     "📊 /pppoe — Sesiones PPPoE activas\n"
     "🏓 /diagnostico <ip> — Ping desde MikroTik\n"
-    "⚠️ /caidas — Outages activos\n"
+    "⚠️ /caidas — Outages activos\n\n"
+    "📍 *Monitoreo:*\n"
+    "📍 /zonas — Zonas y clientes asociados\n"
+    "🚨 /incidentes — Incidentes activos\n"
+    "📊 /monitor — Estado del monitor\n"
+    "🔧 /mantenimiento — Mantenimientos programados\n"
 )
 
 HELP_GUEST = (

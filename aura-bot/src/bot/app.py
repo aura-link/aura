@@ -16,6 +16,11 @@ from src.ai.claude_client import ClaudeClient
 from src.ai.tool_executor import ToolExecutor
 from src.bot.handlers import start, admin, customer, conversation
 from src.bot.handlers.registration import get_registration_handler
+from src.bot.handlers import monitoring_admin
+from src.monitoring.zones import ZoneMapper
+from src.monitoring.notifications import NotificationSender
+from src.monitoring.monitor import NetworkMonitor
+from src.monitoring.maintenance import MaintenanceManager
 from src.utils.logger import log
 
 
@@ -57,11 +62,29 @@ async def post_init(application: Application):
     else:
         log.warning("Claude AI deshabilitado (sin ANTHROPIC_API_KEY)")
 
+    # Monitoring
+    zone_mapper = ZoneMapper(nms, crm, db)
+    notifier = NotificationSender(application.bot, db)
+    monitor = NetworkMonitor(nms, db, zone_mapper, notifier)
+    maintenance_mgr = MaintenanceManager(db)
+
+    application.bot_data["zone_mapper"] = zone_mapper
+    application.bot_data["notifier"] = notifier
+    application.bot_data["monitor"] = monitor
+    application.bot_data["maintenance"] = maintenance_mgr
+
+    if config.MONITOR_ENABLED:
+        await monitor.start()
+
     log.info("Aura Bot inicializado correctamente")
 
 
 async def post_shutdown(application: Application):
     """Limpieza al apagar."""
+    monitor = application.bot_data.get("monitor")
+    if monitor:
+        await monitor.stop()
+
     db = application.bot_data.get("db")
     if db:
         await db.close()
@@ -113,6 +136,12 @@ def create_application() -> Application:
     app.add_handler(CommandHandler("diagnostico", admin.diagnostico_command))
     app.add_handler(CommandHandler("caidas", admin.caidas_command))
 
+    # Monitoring admin commands
+    app.add_handler(CommandHandler("zonas", monitoring_admin.zonas_command))
+    app.add_handler(CommandHandler("incidentes", monitoring_admin.incidentes_command))
+    app.add_handler(CommandHandler("monitor", monitoring_admin.monitor_command))
+    app.add_handler(CommandHandler("mantenimiento", monitoring_admin.mantenimiento_command))
+
     # Callback queries from inline keyboards
     app.add_handler(CallbackQueryHandler(_handle_callback))
 
@@ -142,8 +171,16 @@ async def _handle_callback(update, context):
         "cmd_dispositivos": admin.dispositivos_command,
         "cmd_pppoe": admin.pppoe_command,
         "cmd_caidas": admin.caidas_command,
+        "cmd_zonas": monitoring_admin.zonas_command,
+        "cmd_incidentes": monitoring_admin.incidentes_command,
+        "cmd_monitor": monitoring_admin.monitor_command,
+        "cmd_mantenimiento": monitoring_admin.mantenimiento_command,
     }
 
     handler = handlers.get(data)
     if handler:
         await handler(update, context)
+
+    # Maintenance cancel callbacks
+    if data and data.startswith("cancel_maint_"):
+        await monitoring_admin.handle_cancel_maintenance(update, context)

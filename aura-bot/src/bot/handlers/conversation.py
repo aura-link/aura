@@ -57,6 +57,45 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
+    # === CAPA 2.5: Check incidente/mantenimiento activo (respuesta automatica, $0) ===
+    if link:
+        client_id_check = link["crm_client_id"]
+
+        # Check incidente activo
+        incident = await db.get_active_incident_for_client(client_id_check)
+        if incident:
+            zone = incident.get("site_name", "tu zona")
+            await message.reply_text(
+                f"⚠️ *Interrupcion detectada en zona {zone}*\n\n"
+                "Ya estamos trabajando para restablecer el servicio. "
+                "Te notificaremos cuando se resuelva.\n\n"
+                "Si necesitas mas ayuda, usa /soporte.",
+                parse_mode="Markdown",
+            )
+            log.info("Respuesta automatica por incidente activo para user %d", user.id)
+            return
+
+        # Check mantenimiento activo
+        maint = await db.get_maintenance_for_client(client_id_check)
+        if maint:
+            zone = maint.get("site_name", "tu zona")
+            ends = maint.get("ends_at", "")
+            try:
+                from datetime import datetime
+                et = datetime.fromisoformat(ends)
+                end_fmt = et.strftime("%H:%M")
+            except (ValueError, TypeError):
+                end_fmt = ends
+            await message.reply_text(
+                f"🔧 *Mantenimiento en curso en zona {zone}*\n\n"
+                f"Fin estimado: {end_fmt}\n"
+                "Tu servicio se restablecera al terminar.\n\n"
+                "Si el problema persiste despues, usa /miconexion.",
+                parse_mode="Markdown",
+            )
+            log.info("Respuesta automatica por mantenimiento activo para user %d", user.id)
+            return
+
     # === CAPA 3: Claude AI (con system prompt que refuerza el enfoque) ===
     role_str = role.value
     client_name = link["crm_client_name"] if link else None
@@ -74,6 +113,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Send typing indicator
     await context.bot.send_chat_action(chat_id=message.chat_id, action="typing")
 
+    # Get active incidents for context (admin sees them in system prompt)
+    active_incidents = None
+    if role == Role.ADMIN:
+        active_incidents = await db.get_active_incidents()
+
     # Call Claude
     response = await claude.chat(
         user_message=text,
@@ -82,6 +126,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         client_name=client_name,
         client_id=client_id,
         user_context=user_context,
+        active_incidents=active_incidents if active_incidents else None,
     )
 
     # Save to history

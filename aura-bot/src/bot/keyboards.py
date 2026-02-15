@@ -19,7 +19,10 @@ def main_menu_admin() -> InlineKeyboardMarkup:
          InlineKeyboardButton("👥 Clientes", callback_data="cmd_clientes")],
         [InlineKeyboardButton("📡 Dispositivos", callback_data="cmd_dispositivos"),
          InlineKeyboardButton("📊 PPPoE", callback_data="cmd_pppoe")],
-        [InlineKeyboardButton("⚠️ Caidas", callback_data="cmd_caidas")],
+        [InlineKeyboardButton("⚠️ Caidas", callback_data="cmd_caidas"),
+         InlineKeyboardButton("🚨 Incidentes", callback_data="cmd_incidentes")],
+        [InlineKeyboardButton("📍 Zonas", callback_data="cmd_zonas"),
+         InlineKeyboardButton("📊 Monitor", callback_data="cmd_monitor")],
     ])
 
 

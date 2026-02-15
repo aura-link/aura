@@ -31,6 +31,7 @@ class ClaudeClient:
         client_name: str | None = None,
         client_id: str | None = None,
         user_context: dict | None = None,
+        active_incidents: list[dict] | None = None,
     ) -> str:
         """Envia mensaje a Claude con tool use y retorna respuesta final."""
         if not self.enabled:
@@ -39,7 +40,10 @@ class ClaudeClient:
                 "Usa /help para ver los comandos disponibles."
             )
 
-        system = build_system_prompt(role=role, client_name=client_name, client_id=client_id)
+        system = build_system_prompt(
+            role=role, client_name=client_name, client_id=client_id,
+            active_incidents=active_incidents,
+        )
 
         # Build messages from history
         messages = []

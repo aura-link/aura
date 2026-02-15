@@ -61,6 +61,61 @@ class Database:
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 resolved_at TIMESTAMP
             );
+
+            CREATE TABLE IF NOT EXISTS device_state (
+                device_id TEXT PRIMARY KEY,
+                device_name TEXT,
+                device_ip TEXT,
+                site_id TEXT,
+                status TEXT NOT NULL,
+                role TEXT,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS zone_mapping (
+                endpoint_site_id TEXT PRIMARY KEY,
+                endpoint_site_name TEXT,
+                infra_site_id TEXT NOT NULL,
+                infra_site_name TEXT,
+                crm_client_id TEXT,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_zone_infra ON zone_mapping(infra_site_id);
+            CREATE INDEX IF NOT EXISTS idx_zone_crm ON zone_mapping(crm_client_id);
+
+            CREATE TABLE IF NOT EXISTS incidents (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                device_id TEXT NOT NULL,
+                device_name TEXT,
+                site_id TEXT,
+                site_name TEXT,
+                status TEXT DEFAULT 'active',
+                affected_clients INTEGER DEFAULT 0,
+                started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                resolved_at TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_incident_status ON incidents(status);
+
+            CREATE TABLE IF NOT EXISTS maintenance_windows (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                site_id TEXT,
+                site_name TEXT,
+                description TEXT,
+                starts_at TIMESTAMP NOT NULL,
+                ends_at TIMESTAMP NOT NULL,
+                created_by INTEGER,
+                notified INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS notification_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                telegram_user_id INTEGER NOT NULL,
+                notification_type TEXT NOT NULL,
+                reference_id TEXT,
+                sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_notif_user ON notification_log(telegram_user_id, notification_type, sent_at DESC);
         """)
         await self.db.commit()
 
@@ -142,6 +197,205 @@ class Database:
             (escalation_id,),
         )
         await self.db.commit()
+
+    # -- device_state --
+
+    async def upsert_device_state(self, device_id: str, device_name: str,
+                                   device_ip: str, site_id: str | None,
+                                   status: str, role: str | None):
+        await self.db.execute(
+            """INSERT INTO device_state (device_id, device_name, device_ip, site_id, status, role, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+               ON CONFLICT(device_id) DO UPDATE SET
+               device_name=excluded.device_name, device_ip=excluded.device_ip,
+               site_id=excluded.site_id, status=excluded.status, role=excluded.role,
+               updated_at=CURRENT_TIMESTAMP""",
+            (device_id, device_name, device_ip, site_id, status, role),
+        )
+
+    async def get_device_state(self, device_id: str) -> dict | None:
+        cursor = await self.db.execute(
+            "SELECT * FROM device_state WHERE device_id = ?", (device_id,))
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+
+    async def get_all_device_states(self) -> list[dict]:
+        cursor = await self.db.execute("SELECT * FROM device_state")
+        return [dict(r) for r in await cursor.fetchall()]
+
+    async def commit(self):
+        await self.db.commit()
+
+    # -- zone_mapping --
+
+    async def rebuild_zone_mapping(self, mappings: list[dict]):
+        await self.db.execute("DELETE FROM zone_mapping")
+        for m in mappings:
+            await self.db.execute(
+                """INSERT INTO zone_mapping
+                   (endpoint_site_id, endpoint_site_name, infra_site_id, infra_site_name, crm_client_id)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (m["endpoint_site_id"], m.get("endpoint_site_name"),
+                 m["infra_site_id"], m.get("infra_site_name"),
+                 m.get("crm_client_id")),
+            )
+        await self.db.commit()
+
+    async def get_clients_for_infra_site(self, infra_site_id: str) -> list[dict]:
+        cursor = await self.db.execute(
+            """SELECT zm.crm_client_id, cl.telegram_user_id
+               FROM zone_mapping zm
+               LEFT JOIN customer_links cl ON zm.crm_client_id = cl.crm_client_id
+               WHERE zm.infra_site_id = ? AND zm.crm_client_id IS NOT NULL""",
+            (infra_site_id,),
+        )
+        return [dict(r) for r in await cursor.fetchall()]
+
+    async def get_zone_summary(self) -> list[dict]:
+        cursor = await self.db.execute(
+            """SELECT infra_site_id, infra_site_name,
+                      COUNT(*) as total_endpoints,
+                      COUNT(crm_client_id) as total_clients
+               FROM zone_mapping
+               GROUP BY infra_site_id
+               ORDER BY total_clients DESC""",
+        )
+        return [dict(r) for r in await cursor.fetchall()]
+
+    # -- incidents --
+
+    async def create_incident(self, device_id: str, device_name: str,
+                               site_id: str | None, site_name: str | None,
+                               affected_clients: int) -> int:
+        cursor = await self.db.execute(
+            """INSERT INTO incidents (device_id, device_name, site_id, site_name, affected_clients)
+               VALUES (?, ?, ?, ?, ?)""",
+            (device_id, device_name, site_id, site_name, affected_clients),
+        )
+        await self.db.commit()
+        return cursor.lastrowid  # type: ignore
+
+    async def resolve_incident(self, incident_id: int):
+        await self.db.execute(
+            """UPDATE incidents SET status = 'resolved', resolved_at = CURRENT_TIMESTAMP
+               WHERE id = ?""",
+            (incident_id,),
+        )
+        await self.db.commit()
+
+    async def get_active_incidents(self) -> list[dict]:
+        cursor = await self.db.execute(
+            "SELECT * FROM incidents WHERE status = 'active' ORDER BY started_at DESC"
+        )
+        return [dict(r) for r in await cursor.fetchall()]
+
+    async def get_incident_by_device(self, device_id: str) -> dict | None:
+        cursor = await self.db.execute(
+            "SELECT * FROM incidents WHERE device_id = ? AND status = 'active'",
+            (device_id,),
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+
+    async def get_recent_incidents(self, limit: int = 10) -> list[dict]:
+        cursor = await self.db.execute(
+            "SELECT * FROM incidents ORDER BY started_at DESC LIMIT ?", (limit,)
+        )
+        return [dict(r) for r in await cursor.fetchall()]
+
+    async def get_active_incident_for_client(self, crm_client_id: str) -> dict | None:
+        """Busca incidente activo que afecte al cliente via zone_mapping."""
+        cursor = await self.db.execute(
+            """SELECT i.* FROM incidents i
+               JOIN zone_mapping zm ON i.site_id = zm.infra_site_id
+               WHERE zm.crm_client_id = ? AND i.status = 'active'
+               LIMIT 1""",
+            (crm_client_id,),
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+
+    # -- maintenance_windows --
+
+    async def create_maintenance(self, site_id: str | None, site_name: str | None,
+                                  description: str, starts_at: str, ends_at: str,
+                                  created_by: int) -> int:
+        cursor = await self.db.execute(
+            """INSERT INTO maintenance_windows
+               (site_id, site_name, description, starts_at, ends_at, created_by)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (site_id, site_name, description, starts_at, ends_at, created_by),
+        )
+        await self.db.commit()
+        return cursor.lastrowid  # type: ignore
+
+    async def get_active_maintenance(self) -> list[dict]:
+        cursor = await self.db.execute(
+            """SELECT * FROM maintenance_windows
+               WHERE ends_at > datetime('now')
+               ORDER BY starts_at ASC"""
+        )
+        return [dict(r) for r in await cursor.fetchall()]
+
+    async def get_maintenance_for_client(self, crm_client_id: str) -> dict | None:
+        """Busca mantenimiento activo que afecte al cliente."""
+        cursor = await self.db.execute(
+            """SELECT mw.* FROM maintenance_windows mw
+               JOIN zone_mapping zm ON mw.site_id = zm.infra_site_id
+               WHERE zm.crm_client_id = ?
+               AND mw.starts_at <= datetime('now')
+               AND mw.ends_at > datetime('now')
+               LIMIT 1""",
+            (crm_client_id,),
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+
+    async def get_pending_maintenance(self) -> list[dict]:
+        """Mantenimientos no notificados que ya van a comenzar (dentro de 30 min)."""
+        cursor = await self.db.execute(
+            """SELECT * FROM maintenance_windows
+               WHERE notified = 0
+               AND starts_at <= datetime('now', '+30 minutes')
+               AND ends_at > datetime('now')"""
+        )
+        return [dict(r) for r in await cursor.fetchall()]
+
+    async def mark_maintenance_notified(self, maintenance_id: int):
+        await self.db.execute(
+            "UPDATE maintenance_windows SET notified = 1 WHERE id = ?",
+            (maintenance_id,),
+        )
+        await self.db.commit()
+
+    async def cancel_maintenance(self, maintenance_id: int):
+        await self.db.execute(
+            "DELETE FROM maintenance_windows WHERE id = ?",
+            (maintenance_id,),
+        )
+        await self.db.commit()
+
+    # -- notification_log --
+
+    async def log_notification(self, telegram_user_id: int, notification_type: str,
+                                reference_id: str):
+        await self.db.execute(
+            """INSERT INTO notification_log (telegram_user_id, notification_type, reference_id)
+               VALUES (?, ?, ?)""",
+            (telegram_user_id, notification_type, reference_id),
+        )
+        await self.db.commit()
+
+    async def was_notified_recently(self, telegram_user_id: int, notification_type: str,
+                                     reference_id: str, cooldown_seconds: int) -> bool:
+        cursor = await self.db.execute(
+            """SELECT 1 FROM notification_log
+               WHERE telegram_user_id = ? AND notification_type = ? AND reference_id = ?
+               AND sent_at > datetime('now', ? || ' seconds')
+               LIMIT 1""",
+            (telegram_user_id, notification_type, reference_id, f"-{cooldown_seconds}"),
+        )
+        return await cursor.fetchone() is not None
 
     # -- rate limiting --
 
