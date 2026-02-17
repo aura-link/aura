@@ -202,7 +202,7 @@ wss://server.auralink.link:443+sBRaeWB1kiH4cxBIWmBTEyuxIIeULvidfT3s7UXpR2ZbapIV+
 
 ### Ubicacion
 - **Directorio**: `C:\claude2\aura-bot\`
-- **Bot Telegram**: @auralinkmonitor_bot (ID: 8318058273)
+- **Bot Telegram**: AURA — @auralinkmonitor_bot (ID: 8318058273)
 - **Admin Telegram**: Carlos Eduardo Valenzuela Rios (ID: 1900491583)
 
 ### Stack
@@ -223,8 +223,8 @@ wss://server.auralink.link:443+sBRaeWB1kiH4cxBIWmBTEyuxIIeULvidfT3s7UXpR2ZbapIV+
 ### Comandos implementados
 | Rol | Comandos |
 |-----|----------|
-| Cliente | /misaldo, /miservicio, /miconexion, /reportar, /soporte, /vincular |
-| Admin | /red, /clientes, /buscar, /dispositivos, /pppoe, /diagnostico, /caidas |
+| Cliente | /misaldo, /miservicio, /miconexion, /reportar, /soporte, /vincular + enviar foto comprobante |
+| Admin | /red, /clientes, /buscar, /dispositivos, /pppoe, /diagnostico, /caidas, /pagos, /morosos, /reactivar, /cobranza |
 | Todos | /start, /help, /menu + mensajes libres en español via Claude AI |
 
 ### Archivos clave del bot
@@ -280,17 +280,37 @@ El bot incluye un monitor de red en background que:
 
 **Config vars:** MONITOR_ENABLED, MONITOR_INTERVAL (120s), NOTIFICATION_COOLDOWN (1800s), ZONE_REFRESH_INTERVAL (900s)
 
-### Estado del bot (2026-02-15)
+### Signup Autoservicio con ID de Servicio (implementado 2026-02-17)
+Flujo mejorado de vinculacion Telegram → CRM:
+1. Cliente usa `/start` (guest ve bienvenida + boton "Vincular mi cuenta")
+2. `/vincular` pregunta nombre completo
+3. Muestra teclado con 12 zonas (Tomatlan, La Cumbre, El Coco, etc.)
+4. Fuzzy match contra CRM filtrado por zona, muestra info (nombre, plan, IP antena)
+5. Al confirmar, genera **ID de servicio** `ZONA-ID` (ej: `CBR-213`)
+6. Escribe `userIdent` en CRM via PATCH y guarda link en DB local
+7. Clientes ya vinculados NO aparecen como opcion para otros usuarios
+
+**Abreviaturas de zona**: TML, CBR, PNS, GLR, COC, TUL, NAH, BJZ, CTR, SGR, CRL, JAL
+
+**Archivos del signup:**
+| Archivo | Funcion |
+|---------|---------|
+| `src/bot/handlers/registration.py` | ConversationHandler 3 estados: nombre→zona→confirmar |
+| `src/bot/keyboards.py` | `zone_selection()` teclado inline 12 zonas |
+
+### Estado del bot (2026-02-17)
 - ✅ Desplegado en VPS (217.216.85.65) con Docker
+- ✅ Bot renombrado a "AURA" en BotFather (@auralinkmonitor_bot)
 - ✅ Botones inline funcionando
 - ✅ Claude AI responde con datos reales de UISP y MikroTik
 - ✅ Consulta de saldos, dispositivos offline, sesiones PPPoE
 - ✅ Pre-filtro y rate limiting implementados
-- ✅ Monitor de red corriendo (interval=120s, 28 zonas, 184+ endpoints mapeados)
+- ✅ Monitor de red corriendo (interval=120s, 25 zonas, 172 endpoints mapeados)
 - ✅ Comandos /zonas, /incidentes, /monitor, /mantenimiento funcionando
-- ⚠️ Pendiente: pruebas de diferenciacion admin vs cliente
-- ⚠️ Pendiente: Haiku da error 529 (overloaded), usando Sonnet por ahora
+- ✅ Signup autoservicio con ID de servicio y seleccion de zona
+- ✅ Clientes ya vinculados excluidos de registro (evita duplicados)
 - ✅ Sistema de cobranza automatizada implementado (2026-02-16)
+- ⚠️ Pendiente: Haiku da error 529 (overloaded), usando Sonnet por ahora
 
 ### Sistema de Cobranza Automatizada (implementado 2026-02-16)
 El bot incluye un sistema de cobranza que:
@@ -338,6 +358,47 @@ El bot incluye un sistema de cobranza que:
 | `/clients/services/{id}` | PATCH | Suspender (status=3) / Activar (status=1) |
 
 **MikroTik:** suspend_client() cambia perfil a "Morosos", unsuspend_client() restaura perfil original
+
+### Portal de Morosos / Captive Portal (implementado 2026-02-17)
+Cuando un cliente es suspendido, al intentar navegar ve una página de aviso en lugar de internet.
+
+**Arquitectura completa:**
+1. **PPP Profile "Morosos"** (64k/64k) → throttle de velocidad
+2. **Script `morosos-on-up`** → agrega IP del cliente a address-list "morosos" al conectar
+3. **Script `morosos-on-down`** → remueve IP de address-list al desconectar
+4. **NAT dst-nat** → redirige HTTP (port 80) de address-list "morosos" a VPS:8088
+5. **Firewall filter** → permite acceso al portal (217.216.85.65:8088) y a Telegram (443), bloquea todo lo demás
+6. **Container `morosos-portal`** → nginx:alpine en VPS sirviendo página HTML
+7. **Script `sync-morosos`** → sincroniza address-list "morosos" con perfiles PPP cada 1 minuto (scheduler)
+
+**Reglas MikroTik:**
+- NAT: `chain=dstnat action=dst-nat to-addresses=217.216.85.65 to-ports=8088 protocol=tcp src-address-list=morosos dst-port=80`
+- Filter: `chain=forward action=accept protocol=tcp dst-address=217.216.85.65 src-address-list=morosos dst-port=8088` (permite portal)
+- Filter: `chain=forward action=accept protocol=tcp src-address-list=morosos dst-address-list=telegram-servers dst-port=443` (permite Telegram)
+- Filter: `chain=forward action=accept protocol=udp src-address-list=morosos dst-port=53` (permite DNS)
+- Filter: `chain=forward action=accept protocol=tcp src-address-list=morosos dst-port=53` (permite DNS TCP)
+- Filter: `chain=forward action=drop src-address-list=morosos` (bloquea todo lo demás)
+- Address-list `telegram-servers`: 149.154.160.0/20, 91.108.4.0/22, 91.108.8.0/22, 91.108.12.0/22, 91.108.16.0/22, 91.108.20.0/22, 91.108.56.0/22
+
+**Script `sync-morosos`:**
+- Problema: `morosos-on-up` solo se ejecuta al conectar PPPoE, no cuando se cambia el perfil mid-session
+- Solución: script que itera sesiones activas y sincroniza address-list con perfil del secret
+- Si secret tiene perfil "Morosos" y IP no está en address-list → la agrega
+- Si IP está en address-list pero secret no es "Morosos" → la remueve
+- Scheduler `sync-morosos-schedule` ejecuta cada 1 minuto
+- Subido como `.rsc` via SCP e importado (RouterOS no acepta scripts complejos inline por SSH)
+
+**Portal HTML (VPS):**
+- **Ubicación VPS**: `/root/morosos-portal/` (docker-compose.yml + index.html + nginx.conf)
+- **Ubicación local**: `C:\claude2\morosos-portal\`
+- **Container**: `morosos-portal` (nginx:alpine, puerto 8088, restart: unless-stopped)
+- **Contenido**: Aviso "Servicio Suspendido", cargo reconexión $80, datos BBVA (cuenta/tarjeta/CLABE con botones copiar), pasos para reactivar, nombre del bot @auralinkmonitor_bot copiable (sin link — el mini-browser captivo no puede abrir apps)
+- **Captive portal detection**: Intercepta URLs de conectividad de Android (`/generate_204`), iOS (`/hotspot-detect.html`), Windows (`/connecttest.txt`), Firefox (`/success.txt`) → redirect al portal
+- **Nota**: Links `https://t.me/` y `tg://` NO funcionan en el mini-browser del portal cautivo de Android/iOS. Solo se muestra texto copiable para que el cliente busque el bot manualmente en Telegram.
+
+**Estado actual**: 15 clientes en address-list "morosos" (14 reales + aurora test), portal corriendo y sirviendo página. Sync-morosos scheduler activo (cada 1 min). DNS + Telegram permitidos para morosos.
+
+**Limitación conocida**: HTTPS no se puede redirigir (rompe TLS), pero las detecciones de captive portal de los SO sí disparan la página automáticamente. El botón de Telegram funciona porque se permiten DNS (resolución t.me) y HTTPS a IPs de Telegram (address-list `telegram-servers`). Si el browser captivo no soporta deep links, la página muestra instrucciones alternativas: buscar @auralinkmonitor_bot o "AURA" en Telegram.
 
 ## Auditoría MikroTik RB5009 (2026-02-17)
 
@@ -457,8 +518,8 @@ El bot incluye un sistema de cobranza que:
 - [ ] Crear PPPoE secrets individuales para 6 clienteprueba
 - [ ] Revisar 18 morosos conectados (perfil Morosos en MikroTik)
 - [ ] Probar diferenciacion admin/cliente en system prompt
-- [ ] Probar vinculacion de clientes (/vincular con fuzzy matching)
-- [ ] Renombrar bot en BotFather a "Aura - AURALINK"
+- [x] Flujo /vincular mejorado con zonas, fuzzy match y ID de servicio — implementado
+- [x] Renombrar bot en BotFather a "AURA" — hecho
 - [ ] ~16 dispositivos desconectados pendientes de revisar (+5 nuevos)
 - [ ] 3 dispositivos unauthorized con nombre: Rafael Rodriguez, Eliseo Hernandez, Miriam Cumbre
 - [ ] 3 dispositivos con status "unknown" — investigar
@@ -471,6 +532,9 @@ El bot incluye un sistema de cobranza que:
 - [ ] Probar ciclo completo con /cobranza aviso (trigger manual)
 - [ ] Vincular clientes a Telegram para que reciban notificaciones
 - [x] Auditoria MikroTik completa — firewall, PCC, QoS, morosos, scripts corregidos
+- [x] Portal cautivo morosos — página HTML, NAT redirect, captive portal detection
+- [x] Sync-morosos scheduler — sincroniza address-list cada 1 min al cambiar perfil mid-session
+- [x] Telegram permitido para morosos — address-list telegram-servers + firewall rule
 - [ ] Recalcular PCC divisor para 8 WANs activas (actualmente :7)
 - [ ] Migrar red 172.168.x.x a RFC1918 correcto
 
@@ -505,8 +569,10 @@ Estos datos se envian automaticamente en los recordatorios (dia 3), advertencia 
 - **224 endpoints NMS + 27 infra** = 251 sitios total
 - **255 PPPoE secrets**, ~198 sesiones activas
 - **SSH sin contraseña** configurado para VPS, Aura y MikroTik
-- **Aura Bot** en produccion en VPS con Docker (container: aura-bot)
+- **Aura Bot "AURA"** en produccion en VPS con Docker (container: aura-bot, @auralinkmonitor_bot)
+- **Signup autoservicio**: /vincular con zonas, fuzzy match, ID de servicio (ZONA-ID)
 - **Monitor de red** corriendo (25 zonas, 172 endpoints, polling cada 2 min)
-- **Sistema de cobranza** activo (dia 1/3/7/8, Vision IA, fraude, suspension)
+- **Sistema de cobranza** activo (dia 1/3/7/8, Vision IA, fraude, suspension, BILLING_START_MONTH=2026-04)
 - **Certificado SSL**: Let's Encrypt RSA válido hasta mayo 2026
 - **MikroTik auditado** (2026-02-17): PCC funcional en 8 WANs, firewall asegurado, QoS CAKE en todas las WANs, morosos script corregido, auto-recovery de WANs operativo
+- **Portal morosos** operativo: captive portal con redirect, sync-morosos cada 1 min, Telegram permitido para morosos

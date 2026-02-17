@@ -1,0 +1,10 @@
+services:
+  morosos-portal:
+    image: nginx:alpine
+    container_name: morosos-portal
+    restart: unless-stopped
+    ports:
+      - "8088:80"
+    volumes:
+      - ./index.html:/usr/share/nginx/html/index.html:ro
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro

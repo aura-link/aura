@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AURALINK - Servicio Suspendido</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0a0e27;color:#e0e0e0;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}
+.container{max-width:480px;width:100%;background:#141833;border-radius:16px;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,0.5)}
+.header{background:linear-gradient(135deg,#ff4444,#cc0000);padding:30px 24px;text-align:center}
+.header h1{font-size:24px;font-weight:700;color:#fff;margin-bottom:6px}
+.header p{font-size:14px;color:rgba(255,255,255,0.85)}
+.logo{font-size:32px;margin-bottom:10px}
+.body{padding:24px}
+.alert{background:rgba(255,68,68,0.1);border:1px solid rgba(255,68,68,0.3);border-radius:10px;padding:16px;margin-bottom:20px;text-align:center}
+.alert p{font-size:15px;line-height:1.5}
+.section{margin-bottom:20px}
+.section h2{font-size:14px;text-transform:uppercase;letter-spacing:1px;color:#7b8cde;margin-bottom:12px;padding-bottom:6px;border-bottom:1px solid rgba(123,140,222,0.2)}
+.bank-info{background:#1a1f3d;border-radius:10px;padding:16px}
+.bank-row{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid rgba(255,255,255,0.06)}
+.bank-row:last-child{border-bottom:none}
+.bank-label{font-size:13px;color:#888}
+.bank-value{font-size:14px;font-weight:600;color:#fff;font-family:'Courier New',monospace;letter-spacing:0.5px}
+.copy-btn{background:rgba(123,140,222,0.2);border:none;color:#7b8cde;padding:4px 10px;border-radius:6px;font-size:12px;cursor:pointer;margin-left:8px}
+.copy-btn:active{background:rgba(123,140,222,0.4)}
+.steps{list-style:none;counter-reset:steps}
+.steps li{counter-increment:steps;padding:10px 0 10px 40px;position:relative;font-size:14px;line-height:1.5;border-bottom:1px solid rgba(255,255,255,0.04)}
+.steps li:last-child{border-bottom:none}
+.steps li::before{content:counter(steps);position:absolute;left:0;top:10px;width:28px;height:28px;background:rgba(123,140,222,0.15);color:#7b8cde;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700}
+.telegram-btn{display:block;background:linear-gradient(135deg,#2AABEE,#229ED9);color:#fff;text-align:center;padding:14px;border-radius:10px;text-decoration:none;font-size:15px;font-weight:600;margin-top:16px;transition:opacity 0.2s}
+.telegram-btn:hover{opacity:0.9}
+.footer{text-align:center;padding:16px 24px;font-size:12px;color:#555;border-top:1px solid rgba(255,255,255,0.06)}
+.fee{background:rgba(255,165,0,0.1);border:1px solid rgba(255,165,0,0.3);border-radius:10px;padding:14px;margin-bottom:20px;text-align:center}
+.fee p{font-size:14px;color:#ffaa00;line-height:1.4}
+.fee strong{font-size:18px}
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="header">
+    <div class="logo">&#9888;&#65039;</div>
+    <h1>Servicio Suspendido</h1>
+    <p>AURALINK Internet</p>
+  </div>
+  <div class="body">
+    <div class="alert">
+      <p>Tu servicio de internet ha sido <strong>suspendido por falta de pago</strong>.</p>
+    </div>
+
+    <div class="fee">
+      <p>Cargo por reconexion: <strong>$80 MXN</strong></p>
+      <p style="font-size:12px;margin-top:4px;color:#cc8800">Se suma al saldo pendiente</p>
+    </div>
+
+    <div class="section">
+      <h2>Datos para pago</h2>
+      <div class="bank-info">
+        <div class="bank-row">
+          <span class="bank-label">Banco</span>
+          <span class="bank-value">BBVA Bancomer</span>
+        </div>
+        <div class="bank-row">
+          <span class="bank-label">Titular</span>
+          <span class="bank-value">Carlos E. Valenzuela R.</span>
+        </div>
+        <div class="bank-row">
+          <span class="bank-label">Cuenta</span>
+          <span class="bank-value">285 958 9260 <button class="copy-btn" onclick="copy('2859589260')">Copiar</button></span>
+        </div>
+        <div class="bank-row">
+          <span class="bank-label">Tarjeta</span>
+          <span class="bank-value">4152 3144 8622 9639 <button class="copy-btn" onclick="copy('4152314486229639')">Copiar</button></span>
+        </div>
+        <div class="bank-row">
+          <span class="bank-label">CLABE</span>
+          <span class="bank-value">012400028595892607 <button class="copy-btn" onclick="copy('012400028595892607')">Copiar</button></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2>Pasos para reactivar</h2>
+      <ol class="steps">
+        <li>Realiza tu pago por transferencia, deposito OXXO o efectivo</li>
+        <li>Envia foto del comprobante por Telegram al bot de AURALINK</li>
+        <li>Tu servicio se reactiva automaticamente al verificar el pago</li>
+      </ol>
+    </div>
+
+    <div class="section">
+      <h2>Enviar comprobante</h2>
+      <div style="background:#1a1f3d;border-radius:10px;padding:16px;text-align:center">
+        <div style="font-size:28px;margin-bottom:8px">&#128172;</div>
+        <p style="font-size:14px;color:#aaa;margin-bottom:12px">Abre <strong style="color:#2AABEE">Telegram</strong> y busca:</p>
+        <div style="background:#0a0e27;border-radius:8px;padding:12px;margin-bottom:10px;display:flex;align-items:center;justify-content:center;gap:8px">
+          <span style="font-size:18px;font-weight:700;color:#fff;font-family:'Courier New',monospace">@auralinkmonitor_bot</span>
+          <button class="copy-btn" onclick="copy('auralinkmonitor_bot')" style="padding:6px 14px;font-size:13px">Copiar</button>
+        </div>
+        <p style="font-size:12px;color:#666;margin-bottom:10px">Puede aparecer como <strong style="color:#aaa">AURA</strong></p>
+        <p style="font-size:13px;color:#aaa;line-height:1.5">Envia la foto de tu comprobante<br>y tu servicio se reactiva automaticamente</p>
+      </div>
+    </div>
+  </div>
+  <div class="footer">
+    AURALINK &copy; 2026 &mdash; Tomatlan, Jalisco
+  </div>
+</div>
+<script>
+function copy(t){
+  if(navigator.clipboard){navigator.clipboard.writeText(t).then(()=>{event.target.textContent='OK!';setTimeout(()=>{event.target.textContent='Copiar'},1500)})}
+  else{var a=document.createElement('textarea');a.value=t;document.body.appendChild(a);a.select();document.execCommand('copy');document.body.removeChild(a);event.target.textContent='OK!';setTimeout(()=>{event.target.textContent='Copiar'},1500)}
+}
+</script>
+</body>
+</html>
