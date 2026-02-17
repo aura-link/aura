@@ -33,10 +33,16 @@ Migración de UISP desde servidor local (laptop 10.1.1.254) a VPS en la nube (Co
 ### MikroTik Balanceador
 - **IP**: 10.147.17.11
 - **User**: admin (password: 1234)
-- **SSH**: `ssh mikrotik` (key auth via ProxyJump por VPS)
-- **Función**: PPPoE server, ECMP load balancing con múltiples Starlinks
-- **Interfaz PPPoE**: SFP-LAN
-- **~213 clientes PPP activos**
+- **SSH**: `ssh vps "ssh -o StrictHostKeyChecking=no admin@10.147.17.11 '...'"` (via VPS jump)
+- **Modelo**: RB5009UG+S+ (RouterOS 7.19.2 stable)
+- **Función**: PPPoE server, PCC load balancing con múltiples WANs
+- **Interfaz PPPoE**: SFP-LAN, Pool 10.10.1.2-254
+- **~198 sesiones PPPoE activas**, 255 secrets total
+- **WANs activas**: WAN1 (Starlink2/ether1), WAN2 (Sergio/ether2), WAN5 (StarlinkMini/ether3), WAN6 (StarlinkTotin/ether4), WAN7 (Chuy1/ether5), WAN8 (Chuy2/ether6), WAN9 (StarlinkAurora/ether7), WAN10 (Chaviton/ether8)
+- **WANs caidas**: WAN3 (Presidencia40), WAN4 (Presidencia169)
+- **PCC**: Per-Connection Classifier src-address:7/x distribuyendo en 8 WANs activas
+- **QoS**: CAKE queue discipline por WAN + priority queues (ICMP/ACK p1, DNS/Gaming/VoIP p2, VideoCall/Chat p3, Video p6, Social p7)
+- **Morosos**: perfil "Morosos" (64k/64k) + address-list + firewall drop
 
 ### MikroTik La Gloria
 - **IP**: 10.144.247.27
@@ -310,7 +316,18 @@ El bot incluye un sistema de cobranza que:
 
 **Comandos nuevos:** /pagos (admin), /morosos (admin), /reactivar (admin)
 
-**Config vars:** BILLING_ENABLED, BILLING_DAY_INVOICE (1), BILLING_DAY_REMINDER (3), BILLING_DAY_WARNING (7), BILLING_DAY_SUSPEND (8), RECONNECTION_FEE (80), RECEIPT_STORAGE_PATH
+**Comandos admin:** /pagos, /morosos, /reactivar, /cobranza (trigger manual)
+
+**Config vars:** BILLING_ENABLED, BILLING_DAY_INVOICE (1), BILLING_DAY_REMINDER (3), BILLING_DAY_WARNING (7), BILLING_DAY_SUSPEND (8), RECONNECTION_FEE (80), RECEIPT_STORAGE_PATH, BILLING_START_MONTH (2026-04)
+
+**Características clave:**
+- **Self-recovery**: si el bot estuvo caído en dia de acción, al reiniciar ejecuta todas las acciones pendientes del mes
+- **Todos los clientes**: itera TODOS los clientes CRM con planes facturables (no solo vinculados a Telegram)
+- **Reconexion $80**: clientes suspendidos ven total necesario (deuda + $80), el handler valida que el monto cubra la deuda
+- **Duplicados**: detecta comprobantes repetidos por referencia y por monto reciente (24h)
+- **Admin ve comprobante**: botón "Ver comprobante" en /pagos envía la foto
+- **Trigger manual**: /cobranza aviso|recordatorio|advertencia|suspender
+- **BILLING_START_MONTH=2026-04**: no hace nada hasta abril (marzo es mes de setup)
 
 **CRM API endpoints usados:**
 | Endpoint | Metodo | Funcion |
@@ -321,6 +338,82 @@ El bot incluye un sistema de cobranza que:
 | `/clients/services/{id}` | PATCH | Suspender (status=3) / Activar (status=1) |
 
 **MikroTik:** suspend_client() cambia perfil a "Morosos", unsuspend_client() restaura perfil original
+
+## Auditoría MikroTik RB5009 (2026-02-17)
+
+### Problemas encontrados y corregidos
+
+**CRITICO 1 — Script morosos-on-up roto:**
+- `/ppp active get [find where name=$usr] profile` no funciona en RouterOS 7
+- Corregido a: `/ppp secret get [find where name=$usr] profile`
+- Address-list "morosos" ahora se puebla correctamente con 14 clientes activos
+
+**CRITICO 2 — Firewall input chain abierta:**
+- Solo tenia reglas para forward, no habia drop en input
+- Agregadas 7 reglas: accept established/related, allow ICMP/DNS/DHCP desde LAN, drop-all al final
+
+**CRITICO 3 — Scripts check-WAN* sin permisos:**
+- Netwatch creaba schedulers con policy limitada, scripts fallaban con "not enough permissions"
+- Corregido: `dont-require-permissions=yes` en 7 scripts (check-WAN1,3,4,5,6,7,9)
+- Resultado: auto-recovery de WANs funciona correctamente
+
+**CRITICO 4 — PCC completamente no funcional:**
+- TODAS las rutas PCC estaban deshabilitadas, trafico iba solo por ECMP (3 WANs)
+- Habilitadas rutas PCC para WAN1,2,5,6,7,8,9 — trafico ahora distribuido en 8 WANs
+
+**ALTA — WAN7/WAN8 con IPs y gateways obsoletos:**
+- ISPs cambiaron subnets: WAN7 192.168.12.x→192.168.101.x, WAN8 192.168.11.x→192.168.100.x
+- Eliminadas IPs estaticas viejas, actualizados gateways PCC y netwatch
+- WAN8: gateway no responde ICMP → netwatch monitorea 8.8.8.8 con src-address binding
+- WAN8 PCC route: `check-gateway=none` (por bloqueo ICMP del ISP)
+
+**MEDIA — Mangle WAN9 deshabilitado:**
+- 3 reglas mangle (PCC, Route-to, Download) estaban deshabilitadas con WAN9 activa
+- Habilitadas las 3 reglas
+
+**MEDIA — Queue Tree incompleto:**
+- WAN1-Download estaba deshabilitado → habilitado (CAKE-qos 140M)
+- WAN2-Download no existia → creado (CAKE-qos 140M, Sergio)
+- WAN7/WAN8 max-limit=40M muy bajo para enlaces 100M → ajustado a 90M
+
+**Rutas stale eliminadas:** 3 rutas con gateways obsoletos (192.168.12.1, 192.168.11.1, 192.168.8.1)
+
+### Estado post-auditoria Queue Tree
+
+| WAN | Queue | CAKE max-limit | Estado |
+|-----|-------|---------------|--------|
+| WAN1 (Starlink2) | WAN1-Download | 140M | Habilitado |
+| WAN2 (Sergio) | WAN2-Download | 140M | Creado nuevo |
+| WAN3 (Presidencia40) | WAN3-Download | 60M | Deshabilitado (WAN caida) |
+| WAN4 (Presidencia169) | WAN4-Download | 60M | Deshabilitado (WAN caida) |
+| WAN5 (StarlinkMini) | WAN5-Download | 180M | OK |
+| WAN6 (StarlinkTotin) | WAN6-Download | 180M | OK |
+| WAN7 (Chuy1) | WAN7-Download | 90M | Ajustado (era 40M) |
+| WAN8 (Chuy2) | WAN8-Download | 90M | Ajustado (era 40M) |
+| WAN9 (StarlinkAurora) | WAN9-Download | 180M | OK |
+| WAN10 (Chaviton) | WAN10 | 100M | OK |
+
+### PPP Profiles
+
+| Perfil | Rate Limit | Precio |
+|--------|-----------|--------|
+| default | - | - |
+| $300 Basico | 4M/10M | $300 |
+| $500 Residencial | 5M/15M | $500 |
+| $800 Profesional | 6M/18M | $800 |
+| $1000 Empresarial | 10M/22M | $1,000 |
+| Morosos | 64k/64k | Suspendido |
+| Tecnologico | 10M/30M | Especial |
+| Casas Nodos | 10M/20M | Especial |
+| 20Mb | 20M/20M | Especial |
+
+### Pendientes MikroTik
+- [ ] Recalcular PCC divisor (actualmente :7 con 2 WANs muertas, ideal :8 para 8 WANs activas)
+- [ ] Migrar red 172.168.x.x a rango RFC1918 correcto (172.16-31.x.x)
+- [ ] Limpiar config WAN3/WAN4 (scripts, mangle, routes) o mantener para reconexion futura
+- [ ] Expandir pool PPPoE si se acercan a 253 clientes
+- [ ] Fix/remover scripts de backup por email (SMTP config rota)
+- [ ] 17 antenas con RPC timeout pendientes de investigar
 
 ## Auditoría UISP (2026-02-15)
 
@@ -371,9 +464,15 @@ El bot incluye un sistema de cobranza que:
 - [ ] 3 dispositivos con status "unknown" — investigar
 - [ ] 37 servicios CRM sin enlace a endpoint NMS — enlazar o revisar
 - [ ] Investigar por qué se redujeron endpoints NMS de 248 a 225
-- [x] Sistema de cobranza automatizada — implementado
-- [ ] Deploy cobranza en VPS y probar ciclo completo
-- [ ] Configurar Docker volume para `data/receipts/`
+- [x] Sistema de cobranza automatizada — implementado y desplegado
+- [x] Deploy cobranza en VPS — corriendo con BILLING_START_MONTH=2026-04
+- [x] Docker volume para data/ — ya mapeado en docker-compose.yml
+- [ ] Limpiar facturas de marzo generadas por UISP antes de que arranque abril
+- [ ] Probar ciclo completo con /cobranza aviso (trigger manual)
+- [ ] Vincular clientes a Telegram para que reciban notificaciones
+- [x] Auditoria MikroTik completa — firewall, PCC, QoS, morosos, scripts corregidos
+- [ ] Recalcular PCC divisor para 8 WANs activas (actualmente :7)
+- [ ] Migrar red 172.168.x.x a RFC1918 correcto
 
 ## Planes de servicio (UISP CRM)
 
@@ -404,9 +503,10 @@ Estos datos se envian automaticamente en los recordatorios (dia 3), advertencia 
 - **17 antenas con RPC timeout** — decryption fix aplicado, key exchange funciona, pendiente RPC
 - **261 CRM clientes / 262 servicios** — 225 enlazados a NMS endpoints (37 sin enlace)
 - **224 endpoints NMS + 27 infra** = 251 sitios total
-- **255 PPPoE secrets**, ~201 sesiones activas
+- **255 PPPoE secrets**, ~198 sesiones activas
 - **SSH sin contraseña** configurado para VPS, Aura y MikroTik
 - **Aura Bot** en produccion en VPS con Docker (container: aura-bot)
 - **Monitor de red** corriendo (25 zonas, 172 endpoints, polling cada 2 min)
 - **Sistema de cobranza** activo (dia 1/3/7/8, Vision IA, fraude, suspension)
 - **Certificado SSL**: Let's Encrypt RSA válido hasta mayo 2026
+- **MikroTik auditado** (2026-02-17): PCC funcional en 8 WANs, firewall asegurado, QoS CAKE en todas las WANs, morosos script corregido, auto-recovery de WANs operativo
