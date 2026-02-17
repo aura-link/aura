@@ -217,6 +217,29 @@ class ToolExecutor:
             "promedio_ms": result.get("avg_rtt"),
         }, ensure_ascii=False)
 
+    async def _handle_consultar_dispositivos_tplink(self, inp: dict, ctx: dict) -> str:
+        if not self.mk:
+            return "MikroTik no configurado"
+
+        neighbors = await self.mk.get_neighbors()
+        tplinks = [n for n in neighbors if "tp-link" in (n.get("platform") or "").lower()]
+
+        if not tplinks:
+            return "No se detectaron dispositivos TP-Link en el neighbor list."
+
+        results = []
+        for n in tplinks:
+            results.append({
+                "nombre": n.get("identity") or "sin nombre",
+                "ip": n.get("address") or "sin IP",
+                "modelo": n.get("platform") or "TP-LINK",
+                "firmware": n.get("version") or "N/A",
+                "interfaz": n.get("interface-name") or n.get("interface") or "",
+                "mac": n.get("mac-address") or "",
+            })
+
+        return json.dumps({"total": len(results), "dispositivos": results}, ensure_ascii=False)
+
     async def _handle_escalar_a_soporte(self, inp: dict, ctx: dict) -> str:
         motivo = inp.get("motivo", "Sin motivo especificado")
         user_id = ctx.get("telegram_user_id")

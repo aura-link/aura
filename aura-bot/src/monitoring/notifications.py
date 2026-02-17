@@ -47,6 +47,117 @@ TEMPLATES = {
         "📝 {description}\n"
         "👥 Clientes notificados: {notified_count}"
     ),
+    # -- Billing / Cobranza --
+    "billing_invoice_ready": (
+        "📄 *Factura disponible*\n\n"
+        "Tu factura de *{month}* por *${amount} MXN* esta lista.\n"
+        "Fecha limite de pago: *dia 7* de este mes.\n\n"
+        "Puedes pagar por transferencia o OXXO y enviarme "
+        "una foto del comprobante para registrar tu pago."
+    ),
+    "billing_reminder": (
+        "⏰ *Recordatorio de pago*\n\n"
+        "Tu factura de *{month}* por *${amount} MXN* sigue pendiente.\n"
+        "Quedan *4 dias* para pagar (limite: dia 7).\n\n"
+        "💳 *Datos para deposito/transferencia:*\n"
+        "Banco: *BBVA Bancomer*\n"
+        "Titular: Carlos Eduardo Valenzuela Rios\n"
+        "Cuenta: `285 958 9260`\n"
+        "Tarjeta: `4152 3144 8622 9639`\n"
+        "CLABE: `012 400 02859589260 7`\n\n"
+        "Una vez que pagues, envia foto de tu comprobante "
+        "aqui para registrar tu pago automaticamente."
+    ),
+    "billing_warning": (
+        "🚨 *Ultimo dia para pagar*\n\n"
+        "Hoy es el *ultimo dia* para pagar tu factura de *{month}* "
+        "por *${amount} MXN*.\n\n"
+        "Si no pagas hoy, manana tu servicio sera suspendido "
+        "y se cobrara *${reconnection_fee} MXN de reconexion*.\n\n"
+        "💳 *Datos para deposito/transferencia:*\n"
+        "Banco: *BBVA Bancomer*\n"
+        "Titular: Carlos Eduardo Valenzuela Rios\n"
+        "Cuenta: `285 958 9260`\n"
+        "Tarjeta: `4152 3144 8622 9639`\n"
+        "CLABE: `012 400 02859589260 7`\n\n"
+        "Envia foto de tu comprobante para registrar tu pago."
+    ),
+    "billing_suspended": (
+        "🔴 *Servicio suspendido*\n\n"
+        "Tu servicio ha sido suspendido por falta de pago.\n"
+        "Deuda pendiente: *${amount} MXN*\n"
+        "Cargo de reconexion: *${reconnection_fee} MXN*\n\n"
+        "💳 *Datos para deposito/transferencia:*\n"
+        "Banco: *BBVA Bancomer*\n"
+        "Titular: Carlos Eduardo Valenzuela Rios\n"
+        "Cuenta: `285 958 9260`\n"
+        "Tarjeta: `4152 3144 8622 9639`\n"
+        "CLABE: `012 400 02859589260 7`\n\n"
+        "Realiza el pago y envia foto del comprobante "
+        "para reactivar tu servicio."
+    ),
+    "billing_suspended_admin": (
+        "🔴 *Cliente suspendido*\n\n"
+        "👤 {client_name}\n"
+        "💰 Deuda: ${amount} MXN\n"
+        "📡 Secret: {secret_name}\n"
+        "Perfil anterior: {previous_profile}"
+    ),
+    "payment_approved": (
+        "✅ *Pago registrado*\n\n"
+        "Tu pago de *${amount} MXN* ha sido registrado exitosamente.\n"
+        "Tu saldo esta al corriente.\n\n"
+        "Gracias por tu pago! Tu proximo corte es el dia 1 de {next_month}."
+    ),
+    "payment_pending_admin": (
+        "💵 *Reporte de pago (efectivo)*\n\n"
+        "👤 {client_name}\n"
+        "💰 Monto: ${amount} MXN\n"
+        "📋 Reporte #{report_id}\n\n"
+        "Usa los botones para aprobar o rechazar."
+    ),
+    "payment_pending_client": (
+        "📋 *Reporte enviado*\n\n"
+        "Tu reporte de pago en efectivo por *${amount} MXN* "
+        "ha sido enviado al administrador.\n"
+        "Te avisare cuando sea aprobado."
+    ),
+    "payment_rejected": (
+        "❌ *Reporte no verificado*\n\n"
+        "Tu reporte de pago no pudo ser verificado.\n"
+        "Por favor envia una foto clara del comprobante de pago."
+    ),
+    "payment_approved_admin": (
+        "✅ *Pago auto-registrado*\n\n"
+        "👤 {client_name}\n"
+        "💰 ${amount} MXN ({method})\n"
+        "📋 Reporte #{report_id}\n"
+        "Factura(s): {invoice_ids}"
+    ),
+    "fraud_warning_1": (
+        "⚠️ *Advertencia*\n\n"
+        "Tu reporte de pago no pudo ser verificado.\n"
+        "Asegurate de enviar una foto clara y legible del comprobante.\n\n"
+        "Si tienes dudas, contacta a soporte con /soporte."
+    ),
+    "fraud_warning_2": (
+        "🚨 *Segunda advertencia*\n\n"
+        "Este es tu segundo reporte que no pudo ser verificado.\n"
+        "Un reporte mas sin verificar causara la *suspension automatica* "
+        "de tu servicio.\n\n"
+        "Si necesitas ayuda, contacta a soporte con /soporte."
+    ),
+    "fraud_suspended": (
+        "🔴 *Servicio suspendido por reportes falsos*\n\n"
+        "Tu servicio ha sido suspendido debido a multiples "
+        "reportes de pago no verificables.\n\n"
+        "Contacta al administrador para resolver esta situacion."
+    ),
+    "service_reactivated": (
+        "✅ *Servicio reactivado*\n\n"
+        "Tu servicio de internet ha sido reactivado.\n"
+        "Gracias por tu pago!"
+    ),
 }
 
 

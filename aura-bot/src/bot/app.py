@@ -17,10 +17,15 @@ from src.ai.tool_executor import ToolExecutor
 from src.bot.handlers import start, admin, customer, conversation
 from src.bot.handlers.registration import get_registration_handler
 from src.bot.handlers import monitoring_admin
+from src.bot.handlers import signup
 from src.monitoring.zones import ZoneMapper
 from src.monitoring.notifications import NotificationSender
 from src.monitoring.monitor import NetworkMonitor
 from src.monitoring.maintenance import MaintenanceManager
+from src.billing.payments import PaymentProcessor
+from src.billing.receipt_storage import ReceiptStorage
+from src.billing.scheduler import BillingScheduler
+from src.bot.handlers import billing_admin, receipts
 from src.utils.logger import log
 
 
@@ -76,11 +81,27 @@ async def post_init(application: Application):
     if config.MONITOR_ENABLED:
         await monitor.start()
 
+    # Billing
+    receipt_storage = ReceiptStorage(config.RECEIPT_STORAGE_PATH)
+    payment_processor = PaymentProcessor(crm, mk, db, notifier, receipt_storage)
+    billing_scheduler = BillingScheduler(crm, mk, db, notifier)
+
+    application.bot_data["receipt_storage"] = receipt_storage
+    application.bot_data["payment_processor"] = payment_processor
+    application.bot_data["billing_scheduler"] = billing_scheduler
+
+    if config.BILLING_ENABLED:
+        await billing_scheduler.start()
+
     log.info("Aura Bot inicializado correctamente")
 
 
 async def post_shutdown(application: Application):
     """Limpieza al apagar."""
+    billing_scheduler = application.bot_data.get("billing_scheduler")
+    if billing_scheduler:
+        await billing_scheduler.stop()
+
     monitor = application.bot_data.get("monitor")
     if monitor:
         await monitor.stop()
@@ -136,6 +157,21 @@ def create_application() -> Application:
     app.add_handler(CommandHandler("diagnostico", admin.diagnostico_command))
     app.add_handler(CommandHandler("caidas", admin.caidas_command))
 
+    # TP-Link
+    app.add_handler(CommandHandler("tplink", admin.tplink_command))
+
+    # Signup & plan commands
+    app.add_handler(CommandHandler("alta", signup.alta_command))
+    app.add_handler(CommandHandler("plan", signup.plan_command))
+
+    # Admin panel
+    app.add_handler(CommandHandler("admin", admin.admin_command))
+
+    # Billing admin commands
+    app.add_handler(CommandHandler("pagos", billing_admin.pagos_command))
+    app.add_handler(CommandHandler("morosos", billing_admin.morosos_command))
+    app.add_handler(CommandHandler("reactivar", billing_admin.reactivar_command))
+
     # Monitoring admin commands
     app.add_handler(CommandHandler("zonas", monitoring_admin.zonas_command))
     app.add_handler(CommandHandler("incidentes", monitoring_admin.incidentes_command))
@@ -144,6 +180,9 @@ def create_application() -> Application:
 
     # Callback queries from inline keyboards
     app.add_handler(CallbackQueryHandler(_handle_callback))
+
+    # Photo handler for payment receipts (before catch-all text)
+    app.add_handler(MessageHandler(filters.PHOTO, receipts.handle_photo))
 
     # Free text messages → Claude AI (catch-all, must be last)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, conversation.handle_message))
@@ -175,11 +214,73 @@ async def _handle_callback(update, context):
         "cmd_incidentes": monitoring_admin.incidentes_command,
         "cmd_monitor": monitoring_admin.monitor_command,
         "cmd_mantenimiento": monitoring_admin.mantenimiento_command,
+        "cmd_tplink": admin.tplink_command,
+        "cmd_admin": admin.admin_command,
+        "cmd_pagos": billing_admin.pagos_command,
+        "cmd_morosos": billing_admin.morosos_command,
     }
+
+    # No-op for section dividers
+    if data == "noop":
+        await query.answer()
+        return
 
     handler = handlers.get(data)
     if handler:
         await handler(update, context)
+        return
+
+    # Help callbacks → show usage instructions
+    help_texts = {
+        "cmd_alta_help": (
+            "*Uso:* `/alta nombre-zona,perfil`\n\n"
+            "*Ejemplo:*\n"
+            "`/alta jesus arreola-cumbre,basico`\n\n"
+            "Crea secret PPPoE en MikroTik y cliente en CRM."
+        ),
+        "cmd_plan_help": (
+            "*Uso:* `/plan nombre,perfil`\n\n"
+            "*Ejemplo:*\n"
+            "`/plan jesus valencia,residencial`\n\n"
+            "Cambia el perfil PPPoE del cliente."
+        ),
+        "cmd_buscar_help": (
+            "*Uso:* `/buscar nombre`\n\n"
+            "*Ejemplo:*\n"
+            "`/buscar jesus`\n\n"
+            "Busca clientes en el CRM por nombre."
+        ),
+        "cmd_diag_help": (
+            "*Uso:* `/diagnostico ip`\n\n"
+            "*Ejemplo:*\n"
+            "`/diagnostico 10.10.1.50`\n\n"
+            "Hace ping desde el MikroTik a la IP."
+        ),
+    }
+
+    if data in help_texts:
+        await query.answer()
+        await query.message.reply_text(
+            help_texts[data], parse_mode="Markdown"
+        )
+        return
+
+    # Payment approve/reject callbacks
+    if data and data.startswith("pay_"):
+        await billing_admin.handle_payment_callback(update, context)
+        return
+
+    # "Reportar Pago" button for customers
+    if data == "cmd_reportar_pago":
+        await query.answer()
+        await query.message.reply_text(
+            "💳 *Reportar pago*\n\n"
+            "Envia una foto de tu comprobante de pago "
+            "(transferencia, OXXO o deposito) y lo analizo automaticamente.\n\n"
+            "Solo envia la foto como mensaje.",
+            parse_mode="Markdown",
+        )
+        return
 
     # Maintenance cancel callbacks
     if data and data.startswith("cancel_maint_"):

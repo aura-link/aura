@@ -105,6 +105,14 @@ TOOLS = [
         },
     },
     {
+        "name": "consultar_dispositivos_tplink",
+        "description": "Lista dispositivos TP-Link de la red detectados via CDP en el MikroTik. Muestra nombre, IP, modelo y firmware.",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+        },
+    },
+    {
         "name": "escalar_a_soporte",
         "description": "Crea un ticket de soporte para que un tecnico atienda al cliente. Usar solo cuando el problema no se puede resolver automaticamente.",
         "input_schema": {

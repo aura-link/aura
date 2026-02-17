@@ -77,8 +77,8 @@ wss://server.auralink.link:443+sBRaeWB1kiH4cxBIWmBTEyuxIIeULvidfT3s7UXpR2ZbapIV+
 - Se cambió de ECDSA a RSA para compatibilidad con firmware viejo
 
 ### CRM
-- 248 clientes / 248 servicios
-- 248 sitios NMS endpoint (1:1 con CRM, 100% enlazados)
+- 261 clientes / 262 servicios (actualizado 2026-02-15 noche)
+- 225 sitios NMS endpoint (225 enlazados a CRM, 37 servicios sin enlace NMS)
 - 28 sitios NMS infraestructura
 - **CRM API Key** (X-Auth-App-Key): usa el token del .env, NO el de postgres
 - **Secuencias PostgreSQL**: se desincronizaron tras migración. Si da error 500 al crear suscriptor, resetear con: `SELECT setval('ucrm.SEQUENCE_NAME', (SELECT MAX(col) FROM ucrm.TABLE));`
@@ -122,6 +122,31 @@ wss://server.auralink.link:443+sBRaeWB1kiH4cxBIWmBTEyuxIIeULvidfT3s7UXpR2ZbapIV+
 **Causa**: UISP tenía guardada una key vieja para MAC 28:70:4E:A8:16:99. La antena (Guadalupe Llamas, LiteBeam M5) se conectaba pero UISP no podía descifrar → loop de "connection established → 30s inactivity → reconnecting".
 **Solución**: Eliminar dispositivo fantasma via API (`DELETE /devices/{id}`) y reiniciar udapi-bridge. Tras eso UISP la redescubre con key nueva.
 
+### 7. 17 antenas con "Decryption failed using master key" (2026-02-15 noche)
+**Causa raíz (doble)**:
+1. El script `uisp-key-update.sh` puso `+allowSelfSignedCertificate` en el URI, pero UISP v3.0.151 espera `+allowUntrustedCertificate`. Esto causaba que la encriptación inicial fallara para antenas nuevas.
+2. Algunas antenas tenían **device-specific keys viejas** en su `system.cfg` (de una sesión anterior). Al eliminar las entradas de la BD, UISP no reconocía esas keys.
+
+**Síntomas**: Logs mostraban `"Decryption failed for device MAC using master key"` en los contenedores `app-device-ws-*`. Las antenas estaban en PPPoE (internet funcionaba) pero NO aparecían en UISP.
+
+**Solución aplicada**:
+1. Actualizar `system.cfg` en cada antena: reemplazar toda la URI con `wss://server.auralink.link:443+sBRaeWB1kiH4cxBIWmBTEyuxIIeULvidfT3s7UXpR2ZbapIV+allowUntrustedCertificate`
+2. Guardar a flash: `cfgmtd -w -p /etc/`
+3. Eliminar entradas fantasma de la BD: `DELETE FROM unms.device WHERE (name IS NULL OR name = '') AND ip IS NULL AND connected = false AND authorized = false;`
+4. Reiniciar udapi-bridge (matar proceso hijo)
+
+**Resultado**: Decryption errors eliminados. Key exchange completa. Pero las 17 antenas tienen **RPC timeout** (`"RPC request timeouted: cmd"`) que impide que UISP obtenga la info del dispositivo. Esto es un problema separado que puede ser de compatibilidad firmware o resolverse con tiempo.
+
+**Antenas afectadas**: 10.10.1.95, .67, .249, .98, .88, .216, .160, .86, .159, .149, .245, .194, .162, .169, .112, .226, .62, .124
+
+**Scripts**: `fix-masterkey-all.sh`, `fix-restart-all.sh`, `fix-flag-all.sh`
+
+**Dato clave**: Las antenas que SÍ funcionan tienen device-specific keys únicas (terminan en `AAAAA`) en su URI, asignadas automáticamente por UISP tras key exchange exitoso. El flag correcto es `+allowUntrustedCertificate`, NO `+allowSelfSignedCertificate`.
+
+### 8. Dispositivo rogue "Elizabeth Pilitas" (2026-02-15 noche)
+**Causa**: Antena LiteBeam M5 (MAC 60:22:32:b2:c6:2c) con IP pública 12.13.3.155/22, conectada a SSID "WISP B&V 5G" (otro ISP). Se registró en UISP con connection string de AURALINK pero no pertenece a la red.
+**Solución**: Eliminada via API junto con su sitio huérfano "Pilitas".
+
 ## Archivos Importantes en este Repositorio
 
 | Archivo | Descripción |
@@ -138,6 +163,14 @@ wss://server.auralink.link:443+sBRaeWB1kiH4cxBIWmBTEyuxIIeULvidfT3s7UXpR2ZbapIV+
 | `ppp_raw.txt` | Dump completo de conexiones PPP del MikroTik |
 | `analyze_ppp.py` | Script Python para analizar MACs de PPP |
 | `missing_ubnt.txt` | IPs Ubiquiti que no aparecían en UISP |
+| `cleanup_uisp.py` | Script Python para limpiar fantasmas, unknowns y duplicados desconectados via API |
+| `delete_phantoms.py` | Script Python para eliminar dispositivos fantasma específicos por UUID via API |
+| `reboot-fixed.sh` | Script bash para reiniciar masivamente las 151 antenas corregidas |
+| `fix-masterkey-all.sh` | Script para forzar master key + flag correcto en 18 antenas |
+| `fix-restart-all.sh` | Script para reiniciar udapi-bridge con config correcta en 18 antenas |
+| `fix-flag-all.sh` | Script para cambiar allowSelfSignedCertificate→allowUntrustedCertificate |
+| `fix-udapi-19.sh` | Script para fix masivo de udapi-bridge (rm running.cfg + kill) |
+| `cross_reference.py` | Script para cruce PPPoE ↔ UISP por MAC e IP |
 
 ## Datos Técnicos airOS
 
@@ -251,18 +284,57 @@ El bot incluye un monitor de red en background que:
 - ✅ Comandos /zonas, /incidentes, /monitor, /mantenimiento funcionando
 - ⚠️ Pendiente: pruebas de diferenciacion admin vs cliente
 - ⚠️ Pendiente: Haiku da error 529 (overloaded), usando Sonnet por ahora
+- ✅ Sistema de cobranza automatizada implementado (2026-02-16)
+
+### Sistema de Cobranza Automatizada (implementado 2026-02-16)
+El bot incluye un sistema de cobranza que:
+- Envia avisos automaticos de factura (dia 1), recordatorio (dia 3), advertencia (dia 7)
+- Suspende morosos automaticamente (dia 8) en MikroTik + CRM
+- Recibe fotos de comprobantes → Claude Vision analiza → auto-registra pago en CRM
+- Pagos en efectivo requieren aprobacion del admin via botones inline
+- Fraude: 2 advertencias, al 3er reporte falso = suspension automatica
+- Reactivacion: restaura perfil MikroTik + servicio CRM + notifica cliente
+- Comprobantes guardados en `data/receipts/` (Docker volume)
+
+**Archivos del billing:**
+| Archivo | Funcion |
+|---------|---------|
+| `src/billing/__init__.py` | Package |
+| `src/billing/scheduler.py` | Loop diario: avisa dia 1/3/7, suspende dia 8 |
+| `src/billing/payments.py` | Analisis IA de comprobantes, registro CRM, fraude |
+| `src/billing/receipt_storage.py` | Guarda imagenes en disco |
+| `src/bot/handlers/receipts.py` | Handler de fotos de Telegram |
+| `src/bot/handlers/billing_admin.py` | /pagos, /morosos, /reactivar |
+
+**Tablas DB nuevas:** payment_reports, billing_notifications, fraud_strikes, suspension_log
+
+**Comandos nuevos:** /pagos (admin), /morosos (admin), /reactivar (admin)
+
+**Config vars:** BILLING_ENABLED, BILLING_DAY_INVOICE (1), BILLING_DAY_REMINDER (3), BILLING_DAY_WARNING (7), BILLING_DAY_SUSPEND (8), RECONNECTION_FEE (80), RECEIPT_STORAGE_PATH
+
+**CRM API endpoints usados:**
+| Endpoint | Metodo | Funcion |
+|----------|--------|---------|
+| `/invoices?clientId=X&statuses[]=1` | GET | Facturas impagas |
+| `/payments` | POST | Registrar pago |
+| `/payments/{id}` | DELETE | Reversar pago |
+| `/clients/services/{id}` | PATCH | Suspender (status=3) / Activar (status=1) |
+
+**MikroTik:** suspend_client() cambia perfil a "Morosos", unsuspend_client() restaura perfil original
 
 ## Auditoría UISP (2026-02-15)
 
 ### Análisis cruzado PPPoE ↔ CRM ↔ NMS
-- **248/248 CRM clientes enlazados a endpoints NMS** — 100% cobertura
-- **0 endpoints huérfanos** (se eliminaron 4: Olivia Cumbre, Alma Gloria, Enrique Pulido, Tule Mabel)
+- **225/262 CRM servicios enlazados a endpoints NMS** — 86% cobertura (37 sin enlace)
+- Se eliminaron 4 endpoints huérfanos en auditoría previa: Olivia Cumbre, Alma Gloria, Enrique Pulido, Tule Mabel
 - **Duplicado CRM #254 (Kareli Meza Coco)** eliminado ($0 balance, sin servicio)
 - **Naming consistente**: NMS usa "Zona, Nombre" / CRM usa "Nombre Zona" — todos hacen match
+- **13 clientes nuevos** agregados al CRM desde la auditoría original (248→261)
+- **23 endpoints NMS eliminados** (248→225) — posible consolidación
 
 ### PPPoE
-- 250 secrets total: 219 habilitados, 31 deshabilitados (suspendidos)
-- ~211 sesiones activas
+- 255 secrets total (actualizado 2026-02-15 noche)
+- ~201 sesiones activas
 - 6 sesiones "clienteprueba" (secret compartido para instalaciones nuevas)
 - 18 clientes en perfil "Morosos" conectados (revisar)
 
@@ -294,13 +366,47 @@ El bot incluye un monitor de red en background que:
 - [ ] Probar diferenciacion admin/cliente en system prompt
 - [ ] Probar vinculacion de clientes (/vincular con fuzzy matching)
 - [ ] Renombrar bot en BotFather a "Aura - AURALINK"
-- [ ] ~11 dispositivos desconectados con nombre pendientes de revisar
+- [ ] ~16 dispositivos desconectados pendientes de revisar (+5 nuevos)
 - [ ] 3 dispositivos unauthorized con nombre: Rafael Rodriguez, Eliseo Hernandez, Miriam Cumbre
+- [ ] 3 dispositivos con status "unknown" — investigar
+- [ ] 37 servicios CRM sin enlace a endpoint NMS — enlazar o revisar
+- [ ] Investigar por qué se redujeron endpoints NMS de 248 a 225
+- [x] Sistema de cobranza automatizada — implementado
+- [ ] Deploy cobranza en VPS y probar ciclo completo
+- [ ] Configurar Docker volume para `data/receipts/`
 
-## Estado Actual (2026-02-15)
-- **202 dispositivos** en UISP (tras limpieza): 185 activos, 11 desconectados con nombre, 3 unauthorized, 3 unauthorized con nombre
-- **248 CRM ↔ 248 NMS endpoints** enlazados 1:1
+## Planes de servicio (UISP CRM)
+
+| Plan | Precio/mes | Velocidad | Cobro automatico |
+|------|-----------|-----------|-----------------|
+| Basico Tomatlan | $300 | 3M/8M | Si |
+| Residencial | $500 | 4M/12M | Si |
+| Profesional | $800 | 5M/15M | Si |
+| Empresarial | $1,000 | 8M/20M | Si |
+| Socios Auralink | $400 | 10M/15M | No (plan especial) |
+| Servicio basico descuento | $200 | 2M/4M | No (plan especial) |
+
+Solo los 4 planes principales reciben avisos automaticos de cobranza y suspension.
+
+## Datos bancarios para cobranza
+
+- **Banco**: BBVA Bancomer
+- **Titular**: Carlos Eduardo Valenzuela Rios
+- **Cuenta**: 285 958 9260
+- **Tarjeta**: 4152 3144 8622 9639
+- **CLABE**: 012 400 02859589260 7
+
+Estos datos se envian automaticamente en los recordatorios (dia 3), advertencia (dia 7) y aviso de suspension (dia 8).
+
+## Estado Actual (2026-02-17)
+- **205 dispositivos** en UISP: 187 activos, 15 desconectados, 3 unknown
+- **3 dispositivos autorizados**: Rafael Rodriguez, Eliseo Hernandez, Miriam Cumbre
+- **17 antenas con RPC timeout** — decryption fix aplicado, key exchange funciona, pendiente RPC
+- **261 CRM clientes / 262 servicios** — 225 enlazados a NMS endpoints (37 sin enlace)
+- **224 endpoints NMS + 27 infra** = 251 sitios total
+- **255 PPPoE secrets**, ~201 sesiones activas
 - **SSH sin contraseña** configurado para VPS, Aura y MikroTik
 - **Aura Bot** en produccion en VPS con Docker (container: aura-bot)
-- **Monitor de red** corriendo (28 zonas, polling cada 2 min)
-- **Certificado SSL**: Let's Encrypt RSA válido hasta mayo 2026 (cadena completa, verificado OK desde servidor)
+- **Monitor de red** corriendo (25 zonas, 172 endpoints, polling cada 2 min)
+- **Sistema de cobranza** activo (dia 1/3/7/8, Vision IA, fraude, suspension)
+- **Certificado SSL**: Let's Encrypt RSA válido hasta mayo 2026

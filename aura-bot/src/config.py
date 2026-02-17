@@ -54,3 +54,12 @@ MONITOR_ENABLED: bool = os.getenv("MONITOR_ENABLED", "true").lower() == "true"
 MONITOR_INTERVAL: int = int(os.getenv("MONITOR_INTERVAL", "120"))  # segundos entre polls
 NOTIFICATION_COOLDOWN: int = int(os.getenv("NOTIFICATION_COOLDOWN", "1800"))  # 30 min anti-spam
 ZONE_REFRESH_INTERVAL: int = int(os.getenv("ZONE_REFRESH_INTERVAL", "900"))  # 15 min rebuild zonas
+
+# Cobranza automatizada
+BILLING_ENABLED: bool = os.getenv("BILLING_ENABLED", "true").lower() == "true"
+BILLING_DAY_INVOICE: int = int(os.getenv("BILLING_DAY_INVOICE", "1"))
+BILLING_DAY_REMINDER: int = int(os.getenv("BILLING_DAY_REMINDER", "3"))
+BILLING_DAY_WARNING: int = int(os.getenv("BILLING_DAY_WARNING", "7"))
+BILLING_DAY_SUSPEND: int = int(os.getenv("BILLING_DAY_SUSPEND", "8"))
+RECONNECTION_FEE: float = float(os.getenv("RECONNECTION_FEE", "80"))
+RECEIPT_STORAGE_PATH: str = os.getenv("RECEIPT_STORAGE_PATH", "data/receipts")

@@ -50,6 +50,21 @@ class UispCrmClient(BaseClient):
         name = f"{first} {last}".strip()
         return name or company or "Sin nombre"
 
+    async def create_client(
+        self, first_name: str, last_name: str, is_active: bool = True
+    ) -> dict | None:
+        """Crea un nuevo cliente en el CRM. Retorna el cliente creado o None."""
+        payload = {
+            "firstName": first_name,
+            "lastName": last_name,
+            "isLead": False,
+            "isActive": is_active,
+        }
+        result = await self.post("/clients", json=payload)
+        if result:
+            self._cache.invalidate("clients")
+        return result
+
     # -- Services --
 
     async def get_client_services(self, client_id: str) -> list[dict]:
@@ -90,6 +105,31 @@ class UispCrmClient(BaseClient):
             "currency": "MXN",
         }
 
+    async def update_client_ident(self, client_id: str, user_ident: str) -> bool:
+        """Escribe el userIdent del cliente via PATCH. Retorna True si exitoso."""
+        result = await self.patch(f"/clients/{client_id}", json={"userIdent": user_ident})
+        if result:
+            self._cache.invalidate("clients")
+            return True
+        return False
+
+    async def get_service_zone(self, client_id: str) -> str | None:
+        """Obtiene la zona (city) del primer servicio activo del cliente."""
+        services = await self.get_client_services(client_id)
+        for svc in services:
+            if svc.get("status") in (0, 1):  # prepared or active
+                city = (svc.get("street") or "").strip()
+                if not city:
+                    city = (svc.get("city") or "").strip()
+                if city:
+                    return city
+        # Fallback: any service with city
+        for svc in services:
+            city = (svc.get("city") or "").strip()
+            if city:
+                return city
+        return None
+
     async def get_client_service_details(self, client_id: str) -> list[dict]:
         """Retorna detalles de servicios de un cliente."""
         services = await self.get_client_services(client_id)
@@ -118,6 +158,58 @@ class UispCrmClient(BaseClient):
             "inactive": len(clients) - active,
             "with_balance": with_balance,
         }
+
+
+    # -- Billing / Payments --
+
+    async def get_unpaid_invoices(self, client_id: str | None = None) -> list[dict]:
+        """Facturas impagas (status 1=unpaid, 2=overdue)."""
+        params = {"statuses[]": [1, 2]}
+        if client_id:
+            params["clientId"] = client_id
+        data = await self.get("/invoices", params=params)
+        return data if isinstance(data, list) else []
+
+    async def get_overdue_invoices(self) -> list[dict]:
+        """Facturas vencidas (status 2=overdue)."""
+        data = await self.get("/invoices", params={"statuses[]": [2]})
+        return data if isinstance(data, list) else []
+
+    async def create_payment(
+        self, client_id: int, amount: float, method_id: str,
+        invoice_ids: list[int] | None = None, note: str = ""
+    ) -> dict | None:
+        """Registra un pago en el CRM."""
+        payload = {
+            "clientId": client_id,
+            "amount": amount,
+            "methodId": method_id,
+        }
+        if note:
+            payload["note"] = note
+        if invoice_ids:
+            payload["invoiceIds"] = invoice_ids
+        result = await self.post("/payments", json=payload)
+        if result:
+            self._cache.invalidate("clients")
+        return result
+
+    async def delete_payment(self, payment_id: int) -> bool:
+        """Reversa un pago."""
+        return await self.delete(f"/payments/{payment_id}")
+
+    async def suspend_service(self, service_id: int) -> dict | None:
+        """Suspende un servicio (status=3)."""
+        return await self.patch(f"/clients/services/{service_id}", json={"status": 3})
+
+    async def activate_service(self, service_id: int) -> dict | None:
+        """Activa un servicio (status=1)."""
+        return await self.patch(f"/clients/services/{service_id}", json={"status": 1})
+
+    async def get_payment_methods(self) -> list[dict]:
+        """Lista metodos de pago configurados."""
+        data = await self.get("/payment-methods")
+        return data if isinstance(data, list) else []
 
 
 def _svc_status(code: int | None) -> str:

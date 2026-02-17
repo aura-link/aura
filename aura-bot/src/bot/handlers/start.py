@@ -7,14 +7,20 @@ from src.bot import keyboards
 
 
 WELCOME_MSG = (
-    "👋 *Hola! Soy Aura*, tu asistente virtual de AURALINK.\n\n"
+    "*Hola! Soy AURA*, tu asistente virtual de AURALINK.\n\n"
     "Puedo ayudarte con:\n"
-    "• Consultar tu saldo y pagos\n"
-    "• Ver el estado de tu servicio\n"
-    "• Diagnosticar tu conexion\n"
-    "• Reportar problemas\n\n"
+    "- Consultar tu saldo y pagos\n"
+    "- Ver el estado de tu servicio\n"
+    "- Diagnosticar tu conexion\n"
+    "- Reportar problemas\n\n"
     "Tambien puedes escribirme cualquier pregunta en español.\n\n"
     "Usa /help para ver todos los comandos."
+)
+
+WELCOME_GUEST = (
+    "*Hola! Soy AURA*, asistente virtual de AURALINK.\n\n"
+    "Para atenderte necesito saber quien eres.\n"
+    "Presiona el boton para vincular tu cuenta."
 )
 
 HELP_CUSTOMER = (
@@ -25,6 +31,9 @@ HELP_CUSTOMER = (
     "🔧 /reportar — Diagnostico automatico\n"
     "🆘 /soporte — Escalar a tecnico\n"
     "📋 /menu — Menu principal\n\n"
+    "💳 *Pagos:*\n"
+    "Envia una foto de tu comprobante de pago "
+    "(transferencia u OXXO) y lo registro automaticamente.\n\n"
     "💬 O escribe cualquier pregunta!"
 )
 
@@ -41,7 +50,15 @@ HELP_ADMIN = (
     "📍 /zonas — Zonas y clientes asociados\n"
     "🚨 /incidentes — Incidentes activos\n"
     "📊 /monitor — Estado del monitor\n"
-    "🔧 /mantenimiento — Mantenimientos programados\n"
+    "🔧 /mantenimiento — Mantenimientos programados\n\n"
+    "⚡ *Gestion rapida:*\n"
+    "➕ /alta nombre-zona,perfil — Alta cliente nuevo\n"
+    "📋 /plan nombre,perfil — Cambiar plan PPPoE\n"
+    "🛠 /admin — Panel completo de administracion\n\n"
+    "💳 *Cobranza:*\n"
+    "💳 /pagos — Reportes de pago pendientes\n"
+    "🔴 /morosos — Clientes suspendidos\n"
+    "✅ /reactivar nombre — Reactivar cliente\n"
 )
 
 HELP_GUEST = (
@@ -60,15 +77,17 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     role = get_role(user.id, is_linked=link is not None)
 
     if role == Role.ADMIN:
-        kb = keyboards.main_menu_admin()
+        await update.message.reply_text(
+            WELCOME_MSG, parse_mode="Markdown", reply_markup=keyboards.main_menu_admin()
+        )
     elif role == Role.CUSTOMER:
-        kb = keyboards.main_menu_customer()
+        await update.message.reply_text(
+            WELCOME_MSG, parse_mode="Markdown", reply_markup=keyboards.main_menu_customer()
+        )
     else:
-        kb = keyboards.main_menu_guest()
-
-    await update.message.reply_text(
-        WELCOME_MSG, parse_mode="Markdown", reply_markup=kb
-    )
+        await update.message.reply_text(
+            WELCOME_GUEST, parse_mode="Markdown", reply_markup=keyboards.main_menu_guest()
+        )
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):

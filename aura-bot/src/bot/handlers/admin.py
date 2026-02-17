@@ -1,8 +1,9 @@
-"""Handlers de administrador: /red, /clientes, /buscar, /dispositivos, /pppoe, /diagnostico, /caidas."""
+"""Handlers de administrador: /red, /clientes, /buscar, /dispositivos, /pppoe, /diagnostico, /caidas, /admin."""
 
 from telegram import Update
 from telegram.ext import ContextTypes
 from src.bot.roles import is_admin
+from src.bot import keyboards
 from src.utils.formatting import status_emoji, format_signal, format_uptime, format_mxn, truncate
 from src.utils.logger import log
 
@@ -221,3 +222,70 @@ async def caidas_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text += "\n"
 
     await _reply(update, truncate(text), parse_mode="Markdown")
+
+
+@_admin_required
+async def tplink_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Lista dispositivos TP-Link detectados via CDP en MikroTik."""
+    mk = context.bot_data.get("mikrotik")
+    if not mk:
+        await _reply(update, "⚠️ MikroTik no esta configurado.")
+        return
+
+    try:
+        neighbors = await mk.get_neighbors()
+    except Exception as e:
+        await _reply(update, f"❌ Error conectando a MikroTik: {e}")
+        return
+
+    tplinks = [n for n in neighbors if "tp-link" in (n.get("platform") or "").lower()]
+
+    if not tplinks:
+        await _reply(update, "No se detectaron dispositivos TP-Link en el neighbor list.")
+        return
+
+    # Agrupar por modelo
+    by_model: dict[str, list[dict]] = {}
+    for n in tplinks:
+        platform = n.get("platform") or "TP-LINK"
+        by_model.setdefault(platform, []).append(n)
+
+    text = f"📡 *TP-Link detectados: {len(tplinks)}*\n"
+
+    for model, devices in sorted(by_model.items()):
+        text += f"\n*{model}* ({len(devices)}):\n"
+        for d in sorted(devices, key=lambda x: x.get("identity") or ""):
+            identity = d.get("identity") or "sin nombre"
+            addr = d.get("address") or ""
+            iface = d.get("interface-name") or d.get("interface") or ""
+            version = d.get("version") or ""
+            icon = "🟢" if addr else "⚪"
+            line = f"  {icon} {identity}"
+            if addr:
+                line += f" — {addr}"
+            if version:
+                line += f" (v{version})"
+            if iface:
+                line += f" [{iface}]"
+            text += line + "\n"
+
+    await _reply(update, truncate(text), parse_mode="Markdown")
+
+
+@_admin_required
+async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Panel completo de administracion con todas las herramientas."""
+    text = (
+        "🛠 *Panel de Administracion AURALINK*\n\n"
+        "Selecciona una opcion:"
+    )
+    kb = keyboards.admin_panel()
+    if update.callback_query:
+        await update.callback_query.answer()
+        await update.callback_query.message.reply_text(
+            text, parse_mode="Markdown", reply_markup=kb
+        )
+    elif update.message:
+        await update.message.reply_text(
+            text, parse_mode="Markdown", reply_markup=kb
+        )

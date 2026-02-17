@@ -16,6 +16,7 @@ class Database:
         self._db.row_factory = aiosqlite.Row
         await self._db.execute("PRAGMA journal_mode=WAL")
         await self._create_tables()
+        await self._migrate()
         log.info("Base de datos conectada: %s", self.db_path)
 
     async def close(self):
@@ -37,6 +38,7 @@ class Database:
                 telegram_username TEXT,
                 crm_client_id TEXT NOT NULL,
                 crm_client_name TEXT,
+                service_id TEXT,
                 linked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
 
@@ -116,22 +118,97 @@ class Database:
                 sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
             CREATE INDEX IF NOT EXISTS idx_notif_user ON notification_log(telegram_user_id, notification_type, sent_at DESC);
+
+            CREATE TABLE IF NOT EXISTS payment_reports (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_id TEXT NOT NULL,
+                telegram_user_id INTEGER NOT NULL,
+                amount REAL,
+                method TEXT,
+                receipt_path TEXT,
+                ai_analysis TEXT,
+                matched_invoice_ids TEXT,
+                crm_payment_id INTEGER,
+                status TEXT DEFAULT 'pending',
+                admin_notes TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                reviewed_at TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_payment_reports_status ON payment_reports(status);
+            CREATE INDEX IF NOT EXISTS idx_payment_reports_client ON payment_reports(client_id);
+
+            CREATE TABLE IF NOT EXISTS billing_notifications (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_id TEXT NOT NULL,
+                telegram_user_id INTEGER,
+                notification_type TEXT NOT NULL,
+                invoice_id TEXT,
+                billing_month TEXT,
+                sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_billing_notif ON billing_notifications(client_id, notification_type, billing_month);
+
+            CREATE TABLE IF NOT EXISTS fraud_strikes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_id TEXT NOT NULL,
+                telegram_user_id INTEGER NOT NULL,
+                report_id INTEGER,
+                strike_number INTEGER NOT NULL,
+                reason TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_fraud_client ON fraud_strikes(client_id);
+
+            CREATE TABLE IF NOT EXISTS suspension_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_id TEXT NOT NULL,
+                secret_name TEXT,
+                service_id TEXT,
+                previous_profile TEXT,
+                suspended_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                unsuspended_at TIMESTAMP,
+                reason TEXT DEFAULT 'nonpayment',
+                suspended_by TEXT DEFAULT 'scheduler'
+            );
+            CREATE INDEX IF NOT EXISTS idx_suspension_client ON suspension_log(client_id);
         """)
         await self.db.commit()
+
+    async def _migrate(self):
+        """Migraciones incrementales para tablas existentes."""
+        # Add service_id column if missing (for existing DBs)
+        cursor = await self.db.execute("PRAGMA table_info(customer_links)")
+        cols = [row[1] for row in await cursor.fetchall()]
+        if "service_id" not in cols:
+            await self.db.execute("ALTER TABLE customer_links ADD COLUMN service_id TEXT")
+            await self.db.commit()
+            log.info("Migración: columna service_id agregada a customer_links")
 
     # -- customer_links --
 
     async def link_customer(
         self, telegram_user_id: int, telegram_username: str | None,
-        crm_client_id: str, crm_client_name: str
+        crm_client_id: str, crm_client_name: str, service_id: str | None = None
     ):
         await self.db.execute(
             """INSERT OR REPLACE INTO customer_links
-               (telegram_user_id, telegram_username, crm_client_id, crm_client_name)
-               VALUES (?, ?, ?, ?)""",
-            (telegram_user_id, telegram_username, crm_client_id, crm_client_name),
+               (telegram_user_id, telegram_username, crm_client_id, crm_client_name, service_id)
+               VALUES (?, ?, ?, ?, ?)""",
+            (telegram_user_id, telegram_username, crm_client_id, crm_client_name, service_id),
         )
         await self.db.commit()
+
+    async def get_all_customer_links(self) -> list[dict]:
+        cursor = await self.db.execute("SELECT * FROM customer_links")
+        return [dict(row) for row in await cursor.fetchall()]
+
+    async def get_link_by_service_id(self, service_id: str) -> dict | None:
+        cursor = await self.db.execute(
+            "SELECT * FROM customer_links WHERE service_id = ?",
+            (service_id,),
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
 
     async def get_customer_link(self, telegram_user_id: int) -> dict | None:
         cursor = await self.db.execute(
@@ -396,6 +473,139 @@ class Database:
             (telegram_user_id, notification_type, reference_id, f"-{cooldown_seconds}"),
         )
         return await cursor.fetchone() is not None
+
+    # -- payment_reports --
+
+    async def create_payment_report(
+        self, client_id: str, telegram_user_id: int, amount: float | None,
+        method: str | None, receipt_path: str | None, ai_analysis: str | None,
+        matched_invoice_ids: str | None, status: str = "pending"
+    ) -> int:
+        cursor = await self.db.execute(
+            """INSERT INTO payment_reports
+               (client_id, telegram_user_id, amount, method, receipt_path,
+                ai_analysis, matched_invoice_ids, status)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (client_id, telegram_user_id, amount, method, receipt_path,
+             ai_analysis, matched_invoice_ids, status),
+        )
+        await self.db.commit()
+        return cursor.lastrowid  # type: ignore
+
+    async def get_pending_payment_reports(self) -> list[dict]:
+        cursor = await self.db.execute(
+            "SELECT * FROM payment_reports WHERE status = 'pending' ORDER BY created_at DESC"
+        )
+        return [dict(r) for r in await cursor.fetchall()]
+
+    async def update_payment_report(self, report_id: int, **kwargs):
+        sets = ", ".join(f"{k} = ?" for k in kwargs)
+        vals = list(kwargs.values()) + [report_id]
+        await self.db.execute(
+            f"UPDATE payment_reports SET {sets} WHERE id = ?", vals
+        )
+        await self.db.commit()
+
+    async def get_payment_report(self, report_id: int) -> dict | None:
+        cursor = await self.db.execute(
+            "SELECT * FROM payment_reports WHERE id = ?", (report_id,)
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+
+    # -- billing_notifications --
+
+    async def was_billing_notified(self, client_id: str, notification_type: str,
+                                    billing_month: str) -> bool:
+        cursor = await self.db.execute(
+            """SELECT 1 FROM billing_notifications
+               WHERE client_id = ? AND notification_type = ? AND billing_month = ?
+               LIMIT 1""",
+            (client_id, notification_type, billing_month),
+        )
+        return await cursor.fetchone() is not None
+
+    async def log_billing_notification(self, client_id: str, telegram_user_id: int | None,
+                                        notification_type: str, invoice_id: str | None,
+                                        billing_month: str):
+        await self.db.execute(
+            """INSERT INTO billing_notifications
+               (client_id, telegram_user_id, notification_type, invoice_id, billing_month)
+               VALUES (?, ?, ?, ?, ?)""",
+            (client_id, telegram_user_id, notification_type, invoice_id, billing_month),
+        )
+        await self.db.commit()
+
+    # -- fraud_strikes --
+
+    async def get_fraud_strike_count(self, client_id: str) -> int:
+        cursor = await self.db.execute(
+            "SELECT COUNT(*) FROM fraud_strikes WHERE client_id = ?",
+            (client_id,),
+        )
+        row = await cursor.fetchone()
+        return row[0] if row else 0
+
+    async def add_fraud_strike(self, client_id: str, telegram_user_id: int,
+                                report_id: int, reason: str) -> int:
+        count = await self.get_fraud_strike_count(client_id)
+        strike_number = count + 1
+        await self.db.execute(
+            """INSERT INTO fraud_strikes
+               (client_id, telegram_user_id, report_id, strike_number, reason)
+               VALUES (?, ?, ?, ?, ?)""",
+            (client_id, telegram_user_id, report_id, strike_number, reason),
+        )
+        await self.db.commit()
+        return strike_number
+
+    async def reset_fraud_strikes(self, client_id: str):
+        await self.db.execute(
+            "DELETE FROM fraud_strikes WHERE client_id = ?", (client_id,)
+        )
+        await self.db.commit()
+
+    # -- suspension_log --
+
+    async def log_suspension(
+        self, client_id: str, secret_name: str | None, service_id: str | None,
+        previous_profile: str | None, reason: str = "nonpayment",
+        suspended_by: str = "scheduler"
+    ) -> int:
+        cursor = await self.db.execute(
+            """INSERT INTO suspension_log
+               (client_id, secret_name, service_id, previous_profile, reason, suspended_by)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (client_id, secret_name, service_id, previous_profile, reason, suspended_by),
+        )
+        await self.db.commit()
+        return cursor.lastrowid  # type: ignore
+
+    async def log_unsuspension(self, client_id: str):
+        await self.db.execute(
+            """UPDATE suspension_log SET unsuspended_at = CURRENT_TIMESTAMP
+               WHERE client_id = ? AND unsuspended_at IS NULL""",
+            (client_id,),
+        )
+        await self.db.commit()
+
+    async def get_active_suspensions(self) -> list[dict]:
+        cursor = await self.db.execute(
+            """SELECT * FROM suspension_log
+               WHERE unsuspended_at IS NULL
+               ORDER BY suspended_at DESC"""
+        )
+        return [dict(r) for r in await cursor.fetchall()]
+
+    async def get_suspension_for_client(self, client_id: str) -> dict | None:
+        cursor = await self.db.execute(
+            """SELECT * FROM suspension_log
+               WHERE client_id = ? AND unsuspended_at IS NULL
+               ORDER BY suspended_at DESC LIMIT 1""",
+            (client_id,),
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
 
     # -- rate limiting --
 
