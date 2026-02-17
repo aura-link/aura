@@ -55,6 +55,7 @@ def admin_panel() -> InlineKeyboardMarkup:
         [InlineKeyboardButton("── Cobranza ──", callback_data="noop")],
         [InlineKeyboardButton("💳 Pagos Pendientes", callback_data="cmd_pagos"),
          InlineKeyboardButton("🔴 Morosos", callback_data="cmd_morosos")],
+        [InlineKeyboardButton("⚡ Trigger Cobranza", callback_data="cmd_cobranza_help")],
     ])
 
 

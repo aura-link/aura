@@ -506,6 +506,32 @@ class Database:
         )
         await self.db.commit()
 
+    async def find_payment_report_by_reference(self, client_id: str, reference: str) -> dict | None:
+        """Find existing payment report with same reference number."""
+        cursor = await self.db.execute(
+            """SELECT * FROM payment_reports
+               WHERE client_id = ? AND ai_analysis LIKE ?
+               AND status IN ('approved', 'pending')
+               ORDER BY created_at DESC LIMIT 1""",
+            (client_id, f'%"reference": "{reference}"%'),
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+
+    async def find_recent_payment_report(self, client_id: str, amount: float,
+                                          hours: int = 24) -> dict | None:
+        """Find recent payment report with same amount from same client."""
+        cursor = await self.db.execute(
+            """SELECT * FROM payment_reports
+               WHERE client_id = ? AND amount = ?
+               AND status IN ('approved', 'pending')
+               AND created_at > datetime('now', ? || ' hours')
+               ORDER BY created_at DESC LIMIT 1""",
+            (client_id, amount, f"-{hours}"),
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+
     async def get_payment_report(self, report_id: int) -> dict | None:
         cursor = await self.db.execute(
             "SELECT * FROM payment_reports WHERE id = ?", (report_id,)

@@ -1,10 +1,21 @@
 """Handler de fotos de comprobantes de pago enviados por clientes."""
 
 import json
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from telegram import Update
 from telegram.ext import ContextTypes
 from src.bot.roles import get_role, Role
+from src import config
 from src.utils.logger import log
+
+TZ = ZoneInfo("America/Mexico_City")
+
+MONTH_NAMES = {
+    1: "febrero", 2: "marzo", 3: "abril", 4: "mayo",
+    5: "junio", 6: "julio", 7: "agosto", 8: "septiembre",
+    9: "octubre", 10: "noviembre", 11: "diciembre", 12: "enero",
+}
 
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -34,7 +45,6 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     payment_processor = context.bot_data.get("payment_processor")
     notifier = context.bot_data.get("notifier")
-    crm = context.bot_data.get("uisp_crm")
 
     if not payment_processor:
         await msg.reply_text(
@@ -104,10 +114,43 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    # Check for duplicate receipt
+    duplicate = await payment_processor.check_duplicate_receipt(
+        client_id, reference, amount
+    )
+    if duplicate:
+        dup_id = duplicate.get("id")
+        dup_date = (duplicate.get("created_at") or "")[:16]
+        await msg.reply_text(
+            f"⚠️ Este comprobante ya fue reportado anteriormente "
+            f"(reporte #{dup_id}, {dup_date}).\n\n"
+            f"Si tienes un pago diferente, envia el nuevo comprobante."
+        )
+        return
+
     # Match invoices
     matched = await payment_processor.match_invoices(client_id, amount)
     invoice_ids = [inv.get("id") for inv in matched if inv.get("id")]
     invoice_ids_json = json.dumps(invoice_ids) if invoice_ids else None
+
+    # Check if client is suspended (needs reconnection fee)
+    suspension = await db.get_suspension_for_client(client_id)
+    if suspension:
+        invoices = await payment_processor.crm.get_unpaid_invoices(client_id)
+        total_unpaid = sum(inv.get("total", 0) for inv in invoices)
+        total_needed = payment_processor.calculate_reactivation_amount(total_unpaid)
+
+        if amount < total_unpaid - 5:  # tolerance
+            await msg.reply_text(
+                f"⚠️ Tu servicio esta suspendido.\n"
+                f"Deuda pendiente: *${total_unpaid:.0f} MXN*\n"
+                f"Cargo de reconexion: *${config.RECONNECTION_FEE:.0f} MXN*\n"
+                f"Total necesario: *${total_needed:.0f} MXN*\n\n"
+                f"Tu comprobante es por ${amount:.0f} MXN. "
+                f"Necesitas cubrir al menos ${total_unpaid:.0f} MXN para reactivar.",
+                parse_mode="Markdown",
+            )
+            return
 
     if method == "efectivo":
         # Cash payments need admin approval
@@ -118,32 +161,30 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             status="pending",
         )
 
-        # Notify client
         if notifier:
             await notifier.notify_client(
                 user.id, "payment_pending_client",
                 f"pending_{report_id}", amount=f"{amount:.0f}",
+            )
+            await notifier.notify_admins(
+                "payment_pending_admin", f"pending_{report_id}",
+                client_name=client_name or client_id,
+                amount=f"{amount:.0f}", report_id=report_id,
             )
         else:
             await msg.reply_text(
                 f"📋 Tu reporte de pago en efectivo por ${amount:.0f} MXN "
                 "ha sido enviado al administrador."
             )
-
-        # Notify admin
-        if notifier:
-            await notifier.notify_admins(
-                "payment_pending_admin", f"pending_{report_id}",
-                client_name=client_name or client_id,
-                amount=f"{amount:.0f}", report_id=report_id,
-            )
         return
 
     # Transfer/OXXO - auto-register if confidence is high/medium
     if confidence in ("high", "medium") and invoice_ids:
         note = f"Auto-registrado via Telegram. Ref: {reference}. Confianza: {confidence}"
+        # Register only the invoice amount (not reconnection fee) in CRM
+        invoice_total = sum(inv.get("total", 0) for inv in matched)
         payment = await payment_processor.register_payment(
-            client_id, amount, method, invoice_ids, note,
+            client_id, invoice_total, method, invoice_ids, note,
         )
 
         crm_payment_id = payment.get("id") if payment else None
@@ -154,19 +195,13 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             crm_payment_id=crm_payment_id, status="approved",
         )
 
-        # Check if client was suspended - reactivate
-        suspension = await db.get_suspension_for_client(client_id)
+        # Reactivate if suspended
         if suspension:
             await payment_processor.reactivate_client(client_id, 0)
 
         # Notify client
-        from datetime import datetime
-        from zoneinfo import ZoneInfo
-        now = datetime.now(ZoneInfo("America/Mexico_City"))
-        months = {1: "febrero", 2: "marzo", 3: "abril", 4: "mayo",
-                  5: "junio", 6: "julio", 7: "agosto", 8: "septiembre",
-                  9: "octubre", 10: "noviembre", 11: "diciembre", 12: "enero"}
-        next_month = months.get(now.month, "proximo mes")
+        now = datetime.now(TZ)
+        next_month = MONTH_NAMES.get(now.month, "proximo mes")
 
         if notifier:
             await notifier.notify_client(
@@ -200,15 +235,13 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 user.id, "payment_pending_client",
                 f"pending_{report_id}", amount=f"{amount:.0f}",
             )
-        else:
-            await msg.reply_text(
-                f"📋 Tu comprobante por ${amount:.0f} MXN fue recibido. "
-                "El administrador verificara y registrara tu pago."
-            )
-
-        if notifier:
             await notifier.notify_admins(
                 "payment_pending_admin", f"pending_{report_id}",
                 client_name=client_name or client_id,
                 amount=f"{amount:.0f}", report_id=report_id,
+            )
+        else:
+            await msg.reply_text(
+                f"📋 Tu comprobante por ${amount:.0f} MXN fue recibido. "
+                "El administrador verificara y registrara tu pago."
             )

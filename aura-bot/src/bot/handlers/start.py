@@ -59,6 +59,7 @@ HELP_ADMIN = (
     "💳 /pagos — Reportes de pago pendientes\n"
     "🔴 /morosos — Clientes suspendidos\n"
     "✅ /reactivar nombre — Reactivar cliente\n"
+    "⚡ /cobranza — Trigger manual de cobranza\n"
 )
 
 HELP_GUEST = (

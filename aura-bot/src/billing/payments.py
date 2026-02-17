@@ -82,9 +82,30 @@ class PaymentProcessor:
             log.error("Receipt analysis error: %s", e)
             return {"valid": False, "reason": f"Error de analisis: {e}"}
 
+    async def check_duplicate_receipt(self, client_id: str, reference: str,
+                                      amount: float) -> dict | None:
+        """Check if this receipt was already submitted. Returns existing report or None."""
+        if not self.db:
+            return None
+        # Check by reference number (strongest match)
+        if reference:
+            existing = await self.db.find_payment_report_by_reference(client_id, reference)
+            if existing:
+                return existing
+        # Check by same amount in last 24h from same client
+        recent = await self.db.find_recent_payment_report(client_id, amount, hours=24)
+        return recent
+
+    def calculate_reactivation_amount(self, unpaid_total: float) -> float:
+        """Calculate total needed to reactivate: unpaid + reconnection fee."""
+        return unpaid_total + config.RECONNECTION_FEE
+
     async def match_invoices(self, client_id: str, amount: float,
                               tolerance: float = 5.0) -> list[dict]:
-        """Busca facturas impagas que coincidan con el monto."""
+        """Busca facturas impagas que coincidan con el monto.
+
+        For suspended clients, also accepts amount = invoices + reconnection fee.
+        """
         invoices = await self.crm.get_unpaid_invoices(client_id)
         matches = []
         for inv in invoices:
@@ -96,6 +117,13 @@ class PaymentProcessor:
             total_unpaid = sum(inv.get("total", 0) for inv in invoices)
             if abs(total_unpaid - amount) <= tolerance:
                 matches = invoices
+            # Also try: total + reconnection fee (for suspended clients)
+            elif self.db:
+                suspension = await self.db.get_suspension_for_client(client_id)
+                if suspension:
+                    total_with_fee = total_unpaid + config.RECONNECTION_FEE
+                    if abs(total_with_fee - amount) <= tolerance:
+                        matches = invoices
         return matches
 
     async def register_payment(self, client_id: str, amount: float,

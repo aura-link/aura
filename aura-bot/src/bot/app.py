@@ -171,6 +171,7 @@ def create_application() -> Application:
     app.add_handler(CommandHandler("pagos", billing_admin.pagos_command))
     app.add_handler(CommandHandler("morosos", billing_admin.morosos_command))
     app.add_handler(CommandHandler("reactivar", billing_admin.reactivar_command))
+    app.add_handler(CommandHandler("cobranza", billing_admin.cobranza_command))
 
     # Monitoring admin commands
     app.add_handler(CommandHandler("zonas", monitoring_admin.zonas_command))
@@ -255,6 +256,13 @@ async def _handle_callback(update, context):
             "*Ejemplo:*\n"
             "`/diagnostico 10.10.1.50`\n\n"
             "Hace ping desde el MikroTik a la IP."
+        ),
+        "cmd_cobranza_help": (
+            "*Uso:* `/cobranza <accion>`\n\n"
+            "`/cobranza aviso` — Enviar avisos de factura\n"
+            "`/cobranza recordatorio` — Enviar recordatorios\n"
+            "`/cobranza advertencia` — Enviar advertencias\n"
+            "`/cobranza suspender` — Ejecutar suspensiones\n"
         ),
     }
 

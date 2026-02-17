@@ -63,3 +63,4 @@ BILLING_DAY_WARNING: int = int(os.getenv("BILLING_DAY_WARNING", "7"))
 BILLING_DAY_SUSPEND: int = int(os.getenv("BILLING_DAY_SUSPEND", "8"))
 RECONNECTION_FEE: float = float(os.getenv("RECONNECTION_FEE", "80"))
 RECEIPT_STORAGE_PATH: str = os.getenv("RECEIPT_STORAGE_PATH", "data/receipts")
+BILLING_START_MONTH: str = os.getenv("BILLING_START_MONTH", "2026-04")  # YYYY-MM, no billing before this

@@ -1,10 +1,16 @@
-"""Comandos admin de cobranza: /pagos, /morosos, /reactivar."""
+"""Comandos admin de cobranza: /pagos, /morosos, /reactivar, /cobranza."""
 
 import json
+from datetime import datetime
+from zoneinfo import ZoneInfo
+from pathlib import Path
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from src.bot.roles import is_admin
+from src import config
 from src.utils.logger import log
+
+TZ = ZoneInfo("America/Mexico_City")
 
 
 async def pagos_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -33,6 +39,7 @@ async def pagos_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         amount = report.get("amount", 0)
         method = report.get("method", "?")
         created = report.get("created_at", "")
+        receipt_path = report.get("receipt_path")
 
         # Get client name
         crm = context.bot_data.get("uisp_crm")
@@ -42,10 +49,15 @@ async def pagos_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if c:
                 client_name = crm.get_client_name(c)
 
-        keyboard = InlineKeyboardMarkup([
+        buttons = [
             [InlineKeyboardButton("✅ Aprobar", callback_data=f"pay_approve_{rid}"),
              InlineKeyboardButton("❌ Rechazar", callback_data=f"pay_reject_{rid}")],
-        ])
+        ]
+        if receipt_path:
+            buttons.append(
+                [InlineKeyboardButton("📷 Ver comprobante", callback_data=f"pay_receipt_{rid}")]
+            )
+        keyboard = InlineKeyboardMarkup(buttons)
 
         await msg.reply_text(
             f"📋 *Reporte #{rid}*\n\n"
@@ -164,8 +176,52 @@ async def reactivar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
+async def cobranza_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Trigger manual de acciones de cobranza: /cobranza <accion>."""
+    user = update.effective_user
+    msg = update.message
+    if not user or not msg:
+        return
+
+    if not is_admin(user.id):
+        await msg.reply_text("Solo administradores pueden usar este comando.")
+        return
+
+    args = msg.text.split(maxsplit=1)
+    if len(args) < 2:
+        await msg.reply_text(
+            "📋 *Trigger manual de cobranza*\n\n"
+            "`/cobranza aviso` — Enviar avisos de factura (dia 1)\n"
+            "`/cobranza recordatorio` — Enviar recordatorios (dia 3)\n"
+            "`/cobranza advertencia` — Enviar advertencias (dia 7)\n"
+            "`/cobranza suspender` — Ejecutar suspensiones (dia 8)\n",
+            parse_mode="Markdown",
+        )
+        return
+
+    action_map = {
+        "aviso": "invoice",
+        "recordatorio": "reminder",
+        "advertencia": "warning",
+        "suspender": "suspend",
+    }
+    action = action_map.get(args[1].strip().lower())
+    if not action:
+        await msg.reply_text("Accion no reconocida. Usa: aviso, recordatorio, advertencia, suspender")
+        return
+
+    scheduler = context.bot_data.get("billing_scheduler")
+    if not scheduler:
+        await msg.reply_text("Scheduler de cobranza no disponible.")
+        return
+
+    await msg.reply_text(f"⏳ Ejecutando '{args[1].strip()}'...")
+    result = await scheduler.run_manual(action)
+    await msg.reply_text(f"✅ {result}")
+
+
 async def handle_payment_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Maneja callbacks de aprobar/rechazar pago."""
+    """Maneja callbacks de aprobar/rechazar/ver comprobante."""
     query = update.callback_query
     if not query or not query.data:
         return
@@ -182,6 +238,24 @@ async def handle_payment_callback(update: Update, context: ContextTypes.DEFAULT_
     payment_processor = context.bot_data.get("payment_processor")
     crm = context.bot_data.get("uisp_crm")
     notifier = context.bot_data.get("notifier")
+
+    # View receipt image
+    if data.startswith("pay_receipt_"):
+        report_id = int(data.replace("pay_receipt_", ""))
+        report = await db.get_payment_report(report_id)
+        if not report or not report.get("receipt_path"):
+            await query.message.reply_text("Comprobante no disponible.")
+            return
+        receipt_path = report["receipt_path"]
+        try:
+            with open(receipt_path, "rb") as f:
+                await query.message.reply_photo(
+                    photo=f,
+                    caption=f"📷 Comprobante del reporte #{report_id}",
+                )
+        except FileNotFoundError:
+            await query.message.reply_text("Archivo de comprobante no encontrado.")
+        return
 
     if data.startswith("pay_approve_"):
         report_id = int(data.replace("pay_approve_", ""))
@@ -209,7 +283,7 @@ async def handle_payment_callback(update: Update, context: ContextTypes.DEFAULT_
 
         crm_payment_id = payment.get("id") if payment else None
         await db.update_payment_report(
-            report_id, status="approved", reviewed_at="CURRENT_TIMESTAMP",
+            report_id, status="approved",
             admin_notes=f"Aprobado por {user.id}",
             crm_payment_id=crm_payment_id,
         )
@@ -222,9 +296,8 @@ async def handle_payment_callback(update: Update, context: ContextTypes.DEFAULT_
         # Notify client
         telegram_user_id = report.get("telegram_user_id")
         if telegram_user_id and notifier:
-            from datetime import datetime
-            from zoneinfo import ZoneInfo
-            now = datetime.now(ZoneInfo("America/Mexico_City"))
+            now = datetime.now(TZ)
+            next_month_num = now.month % 12 + 1
             months = {1: "febrero", 2: "marzo", 3: "abril", 4: "mayo",
                       5: "junio", 6: "julio", 7: "agosto", 8: "septiembre",
                       9: "octubre", 10: "noviembre", 11: "diciembre", 12: "enero"}
@@ -264,13 +337,13 @@ async def handle_payment_callback(update: Update, context: ContextTypes.DEFAULT_
 
         client_id = report["client_id"]
         await db.update_payment_report(
-            report_id, status="rejected", reviewed_at="CURRENT_TIMESTAMP",
+            report_id, status="rejected",
             admin_notes=f"Rechazado por {user.id}",
         )
 
         # Check fraud
         if payment_processor:
-            fraud_result = await payment_processor.check_fraud(
+            await payment_processor.check_fraud(
                 client_id, report.get("telegram_user_id", 0),
                 report_id, "Rechazado por admin",
             )
