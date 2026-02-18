@@ -1,11 +1,19 @@
 """Procesador de pagos: analisis IA de comprobantes, registro CRM, fraude."""
 
+import asyncio
 import base64
 import json
 import anthropic
 from src import config
 from src.utils.logger import log
 from src.billing.receipt_storage import ReceiptStorage
+
+VISION_CAPABLE_MODELS = {
+    "claude-sonnet-4-20250514",
+    "claude-sonnet-4-5-20250929",
+    "claude-haiku-4-5-20250929",
+}
+VISION_FALLBACK_MODEL = "claude-sonnet-4-20250514"
 
 
 class PaymentProcessor:
@@ -16,6 +24,7 @@ class PaymentProcessor:
         self.notifier = notifier
         self.receipt_storage = receipt_storage
         self._anthropic: anthropic.AsyncAnthropic | None = None
+        self._register_lock = asyncio.Lock()
 
     @property
     def _client(self) -> anthropic.AsyncAnthropic:
@@ -34,9 +43,11 @@ class PaymentProcessor:
         elif image_bytes[:4] == b"RIFF" and image_bytes[8:12] == b"WEBP":
             media_type = "image/webp"
 
+        vision_model = config.CLAUDE_MODEL if config.CLAUDE_MODEL in VISION_CAPABLE_MODELS else VISION_FALLBACK_MODEL
+
         try:
             response = await self._client.messages.create(
-                model=config.CLAUDE_MODEL,
+                model=vision_model,
                 max_tokens=512,
                 messages=[{
                     "role": "user",
@@ -129,19 +140,27 @@ class PaymentProcessor:
     async def register_payment(self, client_id: str, amount: float,
                                 method: str, invoice_ids: list[int] | None = None,
                                 note: str = "") -> dict | None:
-        """Registra pago en CRM."""
-        # Map method to CRM method ID (from UISP CRM payment-methods API)
-        method_map = {
-            "transferencia": "4145b5f5-3bbc-45e3-8fc5-9cda970c62fb",
-            "oxxo": "4145b5f5-3bbc-45e3-8fc5-9cda970c62fb",  # same as transfer
-            "deposito": "4145b5f5-3bbc-45e3-8fc5-9cda970c62fb",
-            "efectivo": "6efe0fa8-36b2-4dd1-b049-427bffc7d369",
-        }
-        method_id = method_map.get(method, method_map["transferencia"])
-        return await self.crm.create_payment(
-            client_id=int(client_id), amount=amount,
-            method_id=method_id, invoice_ids=invoice_ids, note=note,
-        )
+        """Registra pago en CRM. Uses lock to prevent double-registration."""
+        async with self._register_lock:
+            # Check for recent duplicate before registering
+            if self.db:
+                recent = await self.db.find_recent_payment_report(client_id, amount, hours=1)
+                if recent and recent.get("status") in ("approved", "pending"):
+                    log.warning("Duplicate payment blocked: client=%s amount=%.0f", client_id, amount)
+                    return recent
+
+            # Map method to CRM method ID (from UISP CRM payment-methods API)
+            method_map = {
+                "transferencia": "4145b5f5-3bbc-45e3-8fc5-9cda970c62fb",
+                "oxxo": "4145b5f5-3bbc-45e3-8fc5-9cda970c62fb",  # same as transfer
+                "deposito": "4145b5f5-3bbc-45e3-8fc5-9cda970c62fb",
+                "efectivo": "6efe0fa8-36b2-4dd1-b049-427bffc7d369",
+            }
+            method_id = method_map.get(method, method_map["transferencia"])
+            return await self.crm.create_payment(
+                client_id=int(client_id), amount=amount,
+                method_id=method_id, invoice_ids=invoice_ids, note=note,
+            )
 
     async def check_fraud(self, client_id: str, telegram_user_id: int,
                            report_id: int, reason: str = "Comprobante no verificable"
@@ -172,6 +191,9 @@ class PaymentProcessor:
         previous_profile = None
         if self.mk:
             previous_profile = await self.mk.suspend_client(client_name)
+            if previous_profile is None:
+                log.warning("PPPoE secret not found for fraud suspension: '%s' (ID %s)",
+                            client_name, client_id)
 
         # Suspend in CRM
         services = await self.crm.get_client_services(client_id)

@@ -375,7 +375,7 @@ killall -9 udapi-bridge
 | Rol | Comandos |
 |-----|----------|
 | Cliente | /misaldo, /miservicio, /miconexion, /reportar, /soporte, /vincular + enviar foto comprobante |
-| Admin | /red, /clientes, /buscar, /dispositivos, /pppoe, /diagnostico, /caidas, /pagos, /morosos, /reactivar, /cobranza |
+| Admin | /red, /clientes, /buscar, /dispositivos, /pppoe, /diagnostico, /caidas, /pagos, /morosos, /reactivar, /cobranza, /sinvincular, /progreso, /mensaje |
 | Todos | /start, /help, /menu + mensajes libres en español via Claude AI |
 
 ### Archivos clave del bot
@@ -449,18 +449,20 @@ Flujo mejorado de vinculacion Telegram → CRM:
 | `src/bot/handlers/registration.py` | ConversationHandler 3 estados: nombre→zona→confirmar |
 | `src/bot/keyboards.py` | `zone_selection()` teclado inline 12 zonas |
 
-### Estado del bot (2026-02-17)
+### Estado del bot (2026-02-18)
 - ✅ Desplegado en VPS (217.216.85.65) con Docker
 - ✅ Bot renombrado a "AURA" en BotFather (@auralinkmonitor_bot)
 - ✅ Botones inline funcionando
 - ✅ Claude AI responde con datos reales de UISP y MikroTik
 - ✅ Consulta de saldos, dispositivos offline, sesiones PPPoE
 - ✅ Pre-filtro y rate limiting implementados
-- ✅ Monitor de red corriendo (interval=120s, 25 zonas, 172 endpoints mapeados)
+- ✅ Monitor de red corriendo (interval=120s, 25 zonas, 174 endpoints, 17 infra tracked)
 - ✅ Comandos /zonas, /incidentes, /monitor, /mantenimiento funcionando
 - ✅ Signup autoservicio con ID de servicio y seleccion de zona
 - ✅ Clientes ya vinculados excluidos de registro (evita duplicados)
 - ✅ Sistema de cobranza automatizada implementado (2026-02-16)
+- ✅ Sistema de onboarding interactivo implementado (2026-02-18)
+- ✅ 6 bugs corregidos: monitor device_id, payment crm_payment_id, next_month x2, filter dup, PPPoE matching
 - ⚠️ Pendiente: Haiku da error 529 (overloaded), usando Sonnet por ahora
 
 ### Sistema de Cobranza Automatizada (implementado 2026-02-16)
@@ -509,6 +511,45 @@ El bot incluye un sistema de cobranza que:
 | `/clients/services/{id}` | PATCH | Suspender (status=3) / Activar (status=1) |
 
 **MikroTik:** suspend_client() cambia perfil a "Morosos", unsuspend_client() restaura perfil original
+
+### Sistema de Onboarding Interactivo (implementado 2026-02-18)
+Sistema para rastrear y gestionar la vinculacion de clientes a Telegram antes de abril 2026.
+
+**Comandos admin:**
+- `/sinvincular` — Sincroniza CRM, muestra clientes sin vincular agrupados por zona con botones interactivos
+- `/progreso` — Dashboard con barra de progreso por zona (%) y totales
+- `/mensaje` — Muestra mensaje de WhatsApp listo para copiar y enviar a clientes
+
+**Flujo interactivo:**
+1. `/sinvincular` sincroniza todos los clientes CRM activos y los agrupa por zona (detecta zona desde campo city/street del servicio CRM)
+2. Muestra resumen: X vinculados, Y contactados, Z pendientes
+3. Botones por zona con contadores: "Tomatlan (15 pend, 3 cont)"
+4. Al tocar zona: lista de clientes con botones "Contactado" y "Omitir" individuales
+5. Boton "Marcar todos" para marcar toda una zona de golpe
+6. Boton "Ver contactados" para ver quienes fueron contactados pero no se vincularon
+7. Paginacion automatica (8 clientes por pagina)
+
+**Archivos:**
+| Archivo | Funcion |
+|---------|---------|
+| `src/bot/handlers/onboarding_admin.py` | /sinvincular, /progreso, /mensaje + callbacks |
+
+**Tabla DB nueva:** `onboarding_tracking` (crm_client_id, crm_client_name, zone, status [pending/contacted/linked/skipped], contacted_at, contacted_via, notes)
+
+**Zonas detectadas automáticamente:** TML, CBR, PNS, GLR, COC, TUL, NAH, BJZ, CTR, SGR, CRL, JAL, OTR
+
+**Integración con /vincular:** Cuando un cliente se vincula via `/vincular`, la tabla onboarding se actualiza automáticamente a status "linked"
+
+### Bugs corregidos en Aura Bot (2026-02-18)
+
+| # | Bug | Archivo | Fix |
+|---|-----|---------|-----|
+| 1 | `create_payment_report()` faltaba param `crm_payment_id` → TypeError al auto-aprobar transferencias | `db.py` | Agregado parametro con default None |
+| 2 | `next_month` calculaba mes actual en vez del siguiente | `receipts.py` | `now.month % 12 + 1` |
+| 3 | PPPoE secret name mismatch (CRM "Juan Lopez" vs secret "juanlopez") | `mikrotik.py` | Matching bidireccional + sin espacios + `find_secret_by_ip()` |
+| 4 | Condicion duplicada en filter (`"mi "` x2) | `filter.py` | `"mi "` + `"mis "` |
+| 5 | Dead code `next_month` en billing_admin | `billing_admin.py` | Misma correccion que #2 |
+| 6 | Monitor siempre 0 devices — `device.get("id")` es None, ID esta en `identification.id` | `monitor.py` | `device.get("identification", {}).get("id")` |
 
 ### Portal de Morosos / Captive Portal (implementado 2026-02-17)
 Cuando un cliente es suspendido, al intentar navegar ve una página de aviso en lugar de internet.
@@ -589,6 +630,36 @@ Cuando un cliente es suspendido, al intentar navegar ve una página de aviso en 
 - WAN7/WAN8 max-limit=40M muy bajo para enlaces 100M → ajustado a 90M
 
 **Rutas stale eliminadas:** 3 rutas con gateways obsoletos (192.168.12.1, 192.168.11.1, 192.168.8.1)
+
+### Fixes MikroTik adicionales (2026-02-18)
+
+**WAN10 PCC mangle deshabilitado:**
+- WAN10 (Chaviton/ether8) tiene interfaz deshabilitada pero sus 3 reglas mangle (PCC, Route-to, Download) seguían activas
+- Deshabilitadas: rules 26 (Download-WAN10), 47 (PCC-WAN10), 48 (Route-to-WAN10)
+
+**WAN1 Netwatch corregido:**
+- Monitoreaba 192.168.1.1 (gateway compartido con WAN2) — daba status incorrecto
+- Cambiado a monitorear 8.8.8.8 con `src-address=192.168.1.135` (IP de WAN1)
+- Status: UP y funcional
+
+**WAN2 CAKE QoS arreglado:**
+- Download mangle tenía `in-interface=ether2-WAN` pero tráfico entra por `WAN2 macvlan Sergio`
+- Cambiado a `in-interface=WAN2 macvlan Sergio` — macvlan NO se tocó, solo la regla mangle
+- CAKE queue ahora recibe tráfico correctamente
+
+**Fasttrack deshabilitado:**
+- Rule 15 (fasttrack established/related) bypaseaba TODO el queue tree y mangle
+- Deshabilitado para que QoS CAKE funcione en todas las WANs
+
+**Rule 31 connection-state corregido:**
+- Tenía `connection-state=established,related,new` — "new" permitía todo el tráfico
+- Corregido a `connection-state=established,related`
+
+**2 reglas TEMP-morosos eliminadas:**
+- Reglas temporales de prueba que ya no eran necesarias
+
+**33 dispositivos fantasma UISP eliminados:**
+- `DELETE FROM unms.device WHERE name IS NULL AND connected=false AND authorized=false` → 33 rows
 
 **CRITICO 5 — PCC hijacking tráfico local (2026-02-17 noche):**
 - Las mangle PCC rules (`in-interface=SFP-LAN, connection-mark=no-mark`) marcaban tráfico destinado al MikroTik (10.1.1.1) con routing marks (to_isp1, to_isp2, etc.)
@@ -674,7 +745,7 @@ Todos los 6 clientes que usaban `clienteprueba` ya tienen secrets individuales. 
 Ver detalle en Problema Resuelto #10.
 
 ### Limpieza realizada (acumulado)
-- Eliminados **71 dispositivos fantasma** total (32 via API + 39 via PostgreSQL)
+- Eliminados **104 dispositivos fantasma** total (32 via API + 39 via PostgreSQL + 33 via PostgreSQL 2026-02-18)
 - Eliminados 4 endpoints NMS huérfanos
 - Eliminado 1 duplicado CRM
 - Corregidas ~20 secuencias PostgreSQL del CRM
@@ -703,7 +774,7 @@ Ver detalle en Problema Resuelto #10.
 - [x] Docker volume para data/ — ya mapeado en docker-compose.yml
 - [ ] Limpiar facturas de marzo generadas por UISP antes de que arranque abril
 - [ ] Probar ciclo completo con /cobranza aviso (trigger manual)
-- [ ] Vincular clientes a Telegram para que reciban notificaciones
+- [x] Vincular clientes a Telegram — sistema de onboarding interactivo con /sinvincular, /progreso, /mensaje
 - [x] Auditoria MikroTik completa — firewall, PCC, QoS, morosos, scripts corregidos
 - [x] Portal cautivo morosos — página HTML, NAT redirect, captive portal detection
 - [x] Sync-morosos scheduler — sincroniza address-list cada 1 min al cambiar perfil mid-session
@@ -748,23 +819,17 @@ Solo los 4 planes principales reciben avisos automaticos de cobranza y suspensio
 
 Estos datos se envian automaticamente en los recordatorios (dia 3), advertencia (dia 7) y aviso de suspension (dia 8).
 
-## Estado Actual (2026-02-18 — post fix masivo keys)
-- **184 dispositivos** en UISP: **179 activos** (97%), 5 desconectados, 0 fantasmas
-- **Mejora sesión 02-18**: de 155 activos a 179 activos (+24 recuperados), de 28 desconectados a 5
-- **Causa raíz principal**: device-specific key desync — antenas tenían keys AAAAA pero DB tenía key=NULL tras limpieza de fantasmas. Fix: reset a master key + restart udapi-bridge
+## Estado Actual (2026-02-18 noche)
+- **184 dispositivos** en UISP: **179 activos** (97%), 5 desconectados, 0 fantasmas (33 adicionales eliminados hoy)
 - **261 CRM clientes / 262 servicios** — 224 enlazados 1:1 a NMS endpoints (38 sin enlace)
 - **254 PPPoE secrets** (~198 sesiones activas), clienteprueba deshabilitado, pool 506 IPs
-- **Ping Watchdog**: confirmado activo en 175/176 antenas (period=300s, retry=3, delay=300s)
-- **MikroTik en UISP**: agregado como Third Party (blackBox) en sitio Matriz Tomatlan, IP 10.1.1.1
-- **Infra PCC fix**: mangle `Infra-to-UISP-via-WAN8` fuerza tráfico 10.1.1.0/24→UISP por WAN8 (evita CGNAT Starlink)
-- **SSH sin contraseña** configurado para VPS, Aura y MikroTik
-- **Aura Bot "AURA"** en produccion en VPS con Docker (14 fixes aplicados y desplegados, container healthy)
-- **Signup autoservicio**: /vincular con zonas, fuzzy match, ID de servicio (ZONA-ID)
-- **Monitor de red** corriendo (25 zonas, 172 endpoints, polling cada 2 min)
-- **Sistema de cobranza** activo (dia 1/3/7/8, Vision IA, fraude, suspension, BILLING_START_MONTH=2026-04)
-- **Certificado SSL**: Let's Encrypt RSA válido hasta mayo 2026
-- **MikroTik hardened** (2026-02-17): PCC :8 en 7 WANs, firewall asegurado con drop-all, QoS TLS SNI, backups a VPS, servicios inseguros deshabilitados
+- **MikroTik**: PCC en 7 WANs activas (WAN10 deshabilitado), fasttrack OFF, QoS CAKE funcional en todas las WANs, WAN1/WAN2 netwatch corregidos
+- **Aura Bot "AURA"** en produccion en VPS con Docker — 6 bugs corregidos + onboarding desplegado
+- **Monitor de red** corriendo: 25 zonas, 174 endpoints, 17 infra tracked, polling cada 2 min
+- **Sistema de cobranza** activo: BILLING_START_MONTH=2026-04, listo para abril
+- **Sistema de onboarding**: /sinvincular, /progreso, /mensaje — listo para campana de vinculacion
 - **Portal morosos** operativo: HTTP + HTTPS redirect, sync-morosos cada 1 min, Telegram permitido
-- **Backups automatizados**: MikroTik + Aura DB a VPS diario (cron 4:30/4:35 AM), retención 14 días
-- **5 desconectados restantes**: 10.1.1.211 (credenciales custom), 10.10.1.150, .171, .180, .227 (pendientes)
-- **~53 antenas con credenciales SSH desconocidas** — ninguno de los 3 combos funciona, requieren acceso web/físico
+- **Backups automatizados**: MikroTik + Aura DB a VPS diario (cron 4:30/4:35 AM), retencion 14 dias
+- **5 desconectados restantes**: 10.1.1.211 (credenciales custom), 10.10.1.150, .171, .180, .227
+- **~53 antenas con credenciales SSH desconocidas** — requieren acceso web/fisico
+- **Prioridad**: vincular clientes a Telegram antes de abril (0 vinculados actualmente)

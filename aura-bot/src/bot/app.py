@@ -1,5 +1,6 @@
 """Telegram Application setup: registra handlers y configura dependencias."""
 
+import asyncio
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -26,6 +27,7 @@ from src.billing.payments import PaymentProcessor
 from src.billing.receipt_storage import ReceiptStorage
 from src.billing.scheduler import BillingScheduler
 from src.bot.handlers import billing_admin, receipts
+from src.bot.handlers import onboarding_admin
 from src.utils.logger import log
 
 
@@ -93,11 +95,31 @@ async def post_init(application: Application):
     if config.BILLING_ENABLED:
         await billing_scheduler.start()
 
+    # Periodic cleanup of old conversation history (every hour, removes entries > 1 hour old)
+    async def _cleanup_loop():
+        while True:
+            await asyncio.sleep(3600)
+            try:
+                await db.cleanup_old_conversations(max_age_hours=1)
+                log.info("Conversation history cleanup completed")
+            except Exception as e:
+                log.error("Conversation cleanup error: %s", e)
+
+    application.bot_data["_cleanup_task"] = asyncio.create_task(_cleanup_loop())
+
     log.info("Aura Bot inicializado correctamente")
 
 
 async def post_shutdown(application: Application):
     """Limpieza al apagar."""
+    cleanup_task = application.bot_data.get("_cleanup_task")
+    if cleanup_task:
+        cleanup_task.cancel()
+        try:
+            await cleanup_task
+        except asyncio.CancelledError:
+            pass
+
     billing_scheduler = application.bot_data.get("billing_scheduler")
     if billing_scheduler:
         await billing_scheduler.stop()
@@ -179,6 +201,11 @@ def create_application() -> Application:
     app.add_handler(CommandHandler("monitor", monitoring_admin.monitor_command))
     app.add_handler(CommandHandler("mantenimiento", monitoring_admin.mantenimiento_command))
 
+    # Onboarding admin commands
+    app.add_handler(CommandHandler("sinvincular", onboarding_admin.sinvincular_command))
+    app.add_handler(CommandHandler("progreso", onboarding_admin.progreso_command))
+    app.add_handler(CommandHandler("mensaje", onboarding_admin.mensaje_command))
+
     # Callback queries from inline keyboards
     app.add_handler(CallbackQueryHandler(_handle_callback))
 
@@ -219,6 +246,8 @@ async def _handle_callback(update, context):
         "cmd_admin": admin.admin_command,
         "cmd_pagos": billing_admin.pagos_command,
         "cmd_morosos": billing_admin.morosos_command,
+        "cmd_sinvincular": onboarding_admin.sinvincular_command,
+        "cmd_progreso": onboarding_admin.progreso_command,
     }
 
     # No-op for section dividers
@@ -293,3 +322,9 @@ async def _handle_callback(update, context):
     # Maintenance cancel callbacks
     if data and data.startswith("cancel_maint_"):
         await monitoring_admin.handle_cancel_maintenance(update, context)
+        return
+
+    # Onboarding callbacks (onb_zone_, onb_contacted_, onb_skip_, onb_allzone_, onb_whatsapp, onb_showcontacted_)
+    if data and data.startswith("onb_"):
+        await onboarding_admin.handle_onboarding_callback(update, context)
+        return

@@ -12,9 +12,9 @@ from src.utils.logger import log
 TZ = ZoneInfo("America/Mexico_City")
 
 MONTH_NAMES = {
-    1: "febrero", 2: "marzo", 3: "abril", 4: "mayo",
-    5: "junio", 6: "julio", 7: "agosto", 8: "septiembre",
-    9: "octubre", 10: "noviembre", 11: "diciembre", 12: "enero",
+    1: "enero", 2: "febrero", 3: "marzo", 4: "abril",
+    5: "mayo", 6: "junio", 7: "julio", 8: "agosto",
+    9: "septiembre", 10: "octubre", 11: "noviembre", 12: "diciembre",
 }
 
 
@@ -140,14 +140,14 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         total_unpaid = sum(inv.get("total", 0) for inv in invoices)
         total_needed = payment_processor.calculate_reactivation_amount(total_unpaid)
 
-        if amount < total_unpaid - 5:  # tolerance
+        if amount < total_needed - 5:  # tolerance
             await msg.reply_text(
                 f"⚠️ Tu servicio esta suspendido.\n"
                 f"Deuda pendiente: *${total_unpaid:.0f} MXN*\n"
                 f"Cargo de reconexion: *${config.RECONNECTION_FEE:.0f} MXN*\n"
                 f"Total necesario: *${total_needed:.0f} MXN*\n\n"
                 f"Tu comprobante es por ${amount:.0f} MXN. "
-                f"Necesitas cubrir al menos ${total_unpaid:.0f} MXN para reactivar.",
+                f"Necesitas cubrir al menos ${total_needed:.0f} MXN para reactivar.",
                 parse_mode="Markdown",
             )
             return
@@ -201,7 +201,8 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # Notify client
         now = datetime.now(TZ)
-        next_month = MONTH_NAMES.get(now.month, "proximo mes")
+        next_month_num = now.month % 12 + 1
+        next_month = MONTH_NAMES.get(next_month_num, "proximo mes")
 
         if notifier:
             await notifier.notify_client(

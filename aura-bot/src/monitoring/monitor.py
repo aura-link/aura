@@ -124,7 +124,8 @@ class NetworkMonitor:
         self.tracked_devices = len(infra_devices)
 
         for device in infra_devices:
-            dev_id = device.get("id", "")
+            ident = device.get("identification", {}) or {}
+            dev_id = ident.get("id", "")
             if not dev_id:
                 continue
 
@@ -182,6 +183,14 @@ class NetworkMonitor:
 
         # Commit de estados en batch
         await self.db.commit()
+
+        # Log tracked count periodically (every ~30 polls = ~1 hour)
+        if not hasattr(self, '_poll_count'):
+            self._poll_count = 0
+        self._poll_count += 1
+        if self._poll_count % 30 == 1:
+            log.info("Monitor poll: %d infra devices tracked, %d pending downs",
+                     self.tracked_devices, len(self._pending_downs))
 
         # Check mantenimientos pendientes de notificar
         await self._check_maintenance_notifications()

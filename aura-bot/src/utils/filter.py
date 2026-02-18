@@ -60,7 +60,7 @@ def is_relevant(text: str) -> bool:
             return True
 
     # Preguntas con signos de interrogacion sobre "mi" algo
-    if "?" in text_lower and ("mi " in text_lower or "mi " in text_lower):
+    if "?" in text_lower and ("mi " in text_lower or "mis " in text_lower):
         return True
 
     return False

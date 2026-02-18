@@ -1,6 +1,7 @@
 """Cliente MikroTik via librouteros (RouterOS API, puerto 8728)."""
 
 import asyncio
+import time
 from concurrent.futures import ThreadPoolExecutor
 import librouteros
 from librouteros.query import Key
@@ -18,12 +19,23 @@ class MikroTikClient:
         self.password = config.MIKROTIK_PASSWORD
 
     def _connect(self) -> librouteros.Api:
-        return librouteros.connect(
-            host=self.host,
-            username=self.user,
-            password=self.password,
-            port=self.port,
-        )
+        last_error = None
+        for attempt in range(3):
+            try:
+                return librouteros.connect(
+                    host=self.host,
+                    username=self.user,
+                    password=self.password,
+                    port=self.port,
+                    timeout=10,
+                )
+            except Exception as e:
+                last_error = e
+                if attempt < 2:
+                    delay = 2 ** attempt  # 1s, 2s
+                    log.warning("MikroTik connection attempt %d failed: %s, retrying in %ds", attempt + 1, e, delay)
+                    time.sleep(delay)
+        raise last_error
 
     async def _run(self, func):
         """Ejecuta operacion sincrona de librouteros en thread pool."""
@@ -176,22 +188,47 @@ class MikroTikClient:
         return await self._run(_fetch)
 
     async def find_secret_by_name(self, name: str) -> dict | None:
-        """Busca secret PPPoE por nombre (exacto, luego parcial)."""
+        """Busca secret PPPoE por nombre (exacto, parcial bidireccional, luego sin espacios)."""
         secrets = await self.get_ppp_secrets()
-        name_lower = name.lower()
+        name_lower = name.lower().strip()
         # Exacto
         for s in secrets:
             if (s.get("name") or "").lower() == name_lower:
                 return s
-        # Parcial
+        # Parcial: nombre buscado dentro del secret
         for s in secrets:
             if name_lower in (s.get("name") or "").lower():
                 return s
+        # Parcial inverso: secret dentro del nombre buscado
+        for s in secrets:
+            secret_name = (s.get("name") or "").lower()
+            if secret_name and secret_name in name_lower:
+                return s
+        # Sin espacios: "Juan Lopez" matches "juanlopez"
+        name_nospace = name_lower.replace(" ", "")
+        for s in secrets:
+            secret_nospace = (s.get("name") or "").lower().replace(" ", "")
+            if secret_nospace and (name_nospace == secret_nospace or
+                                   name_nospace in secret_nospace or
+                                   secret_nospace in name_nospace):
+                return s
         return None
 
-    async def suspend_client(self, secret_name: str) -> str | None:
+    async def find_secret_by_ip(self, ip: str) -> dict | None:
+        """Busca secret PPPoE por IP de sesion activa."""
+        session = await self.find_session_by_ip(ip)
+        if not session:
+            return None
+        secret_name = session.get("name")
+        if not secret_name:
+            return None
+        return await self.find_secret_by_name(secret_name)
+
+    async def suspend_client(self, secret_name: str, client_ip: str | None = None) -> str | None:
         """Cambia perfil PPPoE a 'Morosos'. Retorna perfil anterior o None si falla."""
         secret = await self.find_secret_by_name(secret_name)
+        if not secret and client_ip:
+            secret = await self.find_secret_by_ip(client_ip)
         if not secret:
             return None
         previous_profile = secret.get("profile", "default")
@@ -205,9 +242,12 @@ class MikroTikClient:
             return previous_profile
         return None
 
-    async def unsuspend_client(self, secret_name: str, profile: str = "default") -> bool:
+    async def unsuspend_client(self, secret_name: str, profile: str = "default",
+                              client_ip: str | None = None) -> bool:
         """Restaura perfil PPPoE original."""
         secret = await self.find_secret_by_name(secret_name)
+        if not secret and client_ip:
+            secret = await self.find_secret_by_ip(client_ip)
         if not secret:
             return False
         secret_id = secret.get(".id")

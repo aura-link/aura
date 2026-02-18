@@ -171,6 +171,16 @@ class Database:
                 suspended_by TEXT DEFAULT 'scheduler'
             );
             CREATE INDEX IF NOT EXISTS idx_suspension_client ON suspension_log(client_id);
+
+            CREATE TABLE IF NOT EXISTS onboarding_tracking (
+                crm_client_id TEXT PRIMARY KEY,
+                crm_client_name TEXT,
+                zone TEXT,
+                status TEXT DEFAULT 'pending',
+                contacted_at TIMESTAMP,
+                contacted_via TEXT,
+                notes TEXT
+            );
         """)
         await self.db.commit()
 
@@ -479,15 +489,16 @@ class Database:
     async def create_payment_report(
         self, client_id: str, telegram_user_id: int, amount: float | None,
         method: str | None, receipt_path: str | None, ai_analysis: str | None,
-        matched_invoice_ids: str | None, status: str = "pending"
+        matched_invoice_ids: str | None, status: str = "pending",
+        crm_payment_id: int | None = None
     ) -> int:
         cursor = await self.db.execute(
             """INSERT INTO payment_reports
                (client_id, telegram_user_id, amount, method, receipt_path,
-                ai_analysis, matched_invoice_ids, status)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                ai_analysis, matched_invoice_ids, crm_payment_id, status)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (client_id, telegram_user_id, amount, method, receipt_path,
-             ai_analysis, matched_invoice_ids, status),
+             ai_analysis, matched_invoice_ids, crm_payment_id, status),
         )
         await self.db.commit()
         return cursor.lastrowid  # type: ignore
@@ -636,12 +647,113 @@ class Database:
     # -- rate limiting --
 
     async def get_ai_usage_today(self, telegram_user_id: int) -> int:
-        """Cuenta cuantas consultas AI hizo el usuario hoy."""
+        """Cuenta cuantas consultas AI hizo el usuario hoy (Mexico City timezone)."""
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        today_mx = datetime.now(ZoneInfo("America/Mexico_City")).strftime("%Y-%m-%d")
         cursor = await self.db.execute(
             """SELECT COUNT(*) FROM conversation_history
                WHERE telegram_user_id = ? AND role = 'user'
-               AND date(created_at) = date('now')""",
-            (telegram_user_id,),
+               AND date(created_at) = ?""",
+            (telegram_user_id, today_mx),
         )
         row = await cursor.fetchone()
         return row[0] if row else 0
+
+    async def cleanup_old_conversations(self, max_age_hours: int = 1):
+        """Remove conversation history entries older than max_age_hours."""
+        await self.db.execute(
+            "DELETE FROM conversation_history WHERE created_at < datetime('now', ? || ' hours')",
+            (f"-{max_age_hours}",),
+        )
+        await self.db.commit()
+
+    # -- onboarding_tracking --
+
+    async def upsert_onboarding(self, crm_client_id: str, crm_client_name: str,
+                                 zone: str):
+        """Insert or update onboarding record (keeps existing status if already tracked)."""
+        await self.db.execute(
+            """INSERT INTO onboarding_tracking (crm_client_id, crm_client_name, zone)
+               VALUES (?, ?, ?)
+               ON CONFLICT(crm_client_id) DO UPDATE SET
+               crm_client_name=excluded.crm_client_name, zone=excluded.zone""",
+            (crm_client_id, crm_client_name, zone),
+        )
+
+    async def mark_contacted(self, crm_client_id: str, via: str = "whatsapp"):
+        await self.db.execute(
+            """UPDATE onboarding_tracking
+               SET status = 'contacted', contacted_at = CURRENT_TIMESTAMP, contacted_via = ?
+               WHERE crm_client_id = ?""",
+            (via, crm_client_id),
+        )
+        await self.db.commit()
+
+    async def mark_onboarding_skipped(self, crm_client_id: str, notes: str = ""):
+        await self.db.execute(
+            """UPDATE onboarding_tracking
+               SET status = 'skipped', notes = ?
+               WHERE crm_client_id = ?""",
+            (notes, crm_client_id),
+        )
+        await self.db.commit()
+
+    async def get_onboarding_stats(self) -> dict:
+        """Returns counts by status."""
+        cursor = await self.db.execute(
+            """SELECT status, COUNT(*) as cnt
+               FROM onboarding_tracking GROUP BY status"""
+        )
+        rows = await cursor.fetchall()
+        stats = {"pending": 0, "contacted": 0, "linked": 0, "skipped": 0}
+        for r in rows:
+            stats[r[0]] = r[1]
+        return stats
+
+    async def get_onboarding_by_zone(self) -> list[dict]:
+        """Returns zone-level summary."""
+        cursor = await self.db.execute(
+            """SELECT zone,
+                      COUNT(*) as total,
+                      SUM(CASE WHEN status='pending' THEN 1 ELSE 0 END) as pending,
+                      SUM(CASE WHEN status='contacted' THEN 1 ELSE 0 END) as contacted,
+                      SUM(CASE WHEN status='linked' THEN 1 ELSE 0 END) as linked,
+                      SUM(CASE WHEN status='skipped' THEN 1 ELSE 0 END) as skipped
+               FROM onboarding_tracking
+               GROUP BY zone ORDER BY pending DESC"""
+        )
+        return [dict(r) for r in await cursor.fetchall()]
+
+    async def get_uncontacted_by_zone(self, zone: str) -> list[dict]:
+        """Returns uncontacted clients in a zone."""
+        cursor = await self.db.execute(
+            """SELECT * FROM onboarding_tracking
+               WHERE zone = ? AND status = 'pending'
+               ORDER BY crm_client_name""",
+            (zone,),
+        )
+        return [dict(r) for r in await cursor.fetchall()]
+
+    async def get_contacted_unlinked_by_zone(self, zone: str) -> list[dict]:
+        """Returns contacted but not yet linked clients in a zone."""
+        cursor = await self.db.execute(
+            """SELECT * FROM onboarding_tracking
+               WHERE zone = ? AND status = 'contacted'
+               ORDER BY contacted_at DESC""",
+            (zone,),
+        )
+        return [dict(r) for r in await cursor.fetchall()]
+
+    async def mark_onboarding_linked(self, crm_client_id: str):
+        """Mark client as linked in onboarding tracking."""
+        await self.db.execute(
+            """UPDATE onboarding_tracking SET status = 'linked'
+               WHERE crm_client_id = ?""",
+            (crm_client_id,),
+        )
+        await self.db.commit()
+
+    async def onboarding_sync_committed(self):
+        """Commit pending onboarding changes."""
+        await self.db.commit()

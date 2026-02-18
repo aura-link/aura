@@ -244,6 +244,9 @@ class BillingScheduler:
             previous_profile = None
             if self.mk:
                 previous_profile = await self.mk.suspend_client(client_name)
+                if previous_profile is None:
+                    log.warning("PPPoE secret not found for client '%s' (ID %s) — manual suspension needed",
+                                client_name, client_id)
 
             # Suspend in CRM
             services = await self.crm.get_client_services(client_id)

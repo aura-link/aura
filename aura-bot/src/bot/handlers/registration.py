@@ -374,6 +374,9 @@ async def handle_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         service_id=service_id,
     )
 
+    # Update onboarding tracking
+    await db.mark_onboarding_linked(client_id)
+
     log.info("Cliente vinculado: Telegram %d -> CRM %s (%s) service_id=%s",
              user.id, client_id, client_name, service_id)
 
@@ -424,8 +427,25 @@ def get_registration_handler() -> ConversationHandler:
             WAITING_CONFIRM: [
                 CallbackQueryHandler(handle_confirm, pattern="^reg_"),
             ],
+            ConversationHandler.TIMEOUT: [
+                MessageHandler(filters.ALL, _timeout_handler),
+            ],
         },
         fallbacks=[
             CommandHandler("cancelar", cancel),
         ],
+        conversation_timeout=300,
     )
+
+
+async def _timeout_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Notifica al usuario que la conversacion expiro."""
+    msg = update.message or (update.callback_query.message if update.callback_query else None)
+    if msg:
+        await msg.reply_text(
+            "La vinculacion se cancelo por inactividad (5 minutos).\n"
+            "Usa /vincular para intentar de nuevo."
+        )
+    for key in ["reg_name", "reg_zone_abbr", "reg_zone_name", "reg_matches", "reg_waiting_custom_zone"]:
+        context.user_data.pop(key, None)
+    return ConversationHandler.END

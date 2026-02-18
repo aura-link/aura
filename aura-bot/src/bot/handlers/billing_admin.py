@@ -298,10 +298,10 @@ async def handle_payment_callback(update: Update, context: ContextTypes.DEFAULT_
         if telegram_user_id and notifier:
             now = datetime.now(TZ)
             next_month_num = now.month % 12 + 1
-            months = {1: "febrero", 2: "marzo", 3: "abril", 4: "mayo",
-                      5: "junio", 6: "julio", 7: "agosto", 8: "septiembre",
-                      9: "octubre", 10: "noviembre", 11: "diciembre", 12: "enero"}
-            next_month = months.get(now.month, "proximo mes")
+            months = {1: "enero", 2: "febrero", 3: "marzo", 4: "abril",
+                      5: "mayo", 6: "junio", 7: "julio", 8: "agosto",
+                      9: "septiembre", 10: "octubre", 11: "noviembre", 12: "diciembre"}
+            next_month = months.get(next_month_num, "proximo mes")
             await notifier.notify_client(
                 telegram_user_id, "payment_approved",
                 f"approved_{report_id}",
