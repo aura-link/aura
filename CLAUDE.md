@@ -36,13 +36,19 @@ Migración de UISP desde servidor local (laptop 10.1.1.254) a VPS en la nube (Co
 - **SSH**: `ssh vps "ssh -o StrictHostKeyChecking=no admin@10.147.17.11 '...'"` (via VPS jump)
 - **Modelo**: RB5009UG+S+ (RouterOS 7.19.2 stable)
 - **Función**: PPPoE server, PCC load balancing con múltiples WANs
-- **Interfaz PPPoE**: SFP-LAN, Pool 10.10.1.2-254
-- **~198 sesiones PPPoE activas**, 255 secrets total
-- **WANs activas**: WAN1 (Starlink2/ether1), WAN2 (Sergio/ether2), WAN5 (StarlinkMini/ether3), WAN6 (StarlinkTotin/ether4), WAN7 (Chuy1/ether5), WAN8 (Chuy2/ether6), WAN9 (StarlinkAurora/ether7), WAN10 (Chaviton/ether8)
-- **WANs caidas**: WAN3 (Presidencia40), WAN4 (Presidencia169)
-- **PCC**: Per-Connection Classifier src-address:7/x distribuyendo en 8 WANs activas
-- **QoS**: CAKE queue discipline por WAN + priority queues (ICMP/ACK p1, DNS/Gaming/VoIP p2, VideoCall/Chat p3, Video p6, Social p7)
-- **Morosos**: perfil "Morosos" (64k/64k) + address-list + firewall drop
+- **Interfaz PPPoE**: SFP-LAN, Pool 10.10.1.2-254 + 10.10.2.2-254 (506 IPs total)
+- **~196 sesiones PPPoE activas**, 254 secrets (clienteprueba deshabilitado)
+- **WANs activas (7)**: WAN1 (Starlink2/ether1), WAN2 (Sergio/ether2-WAN), WAN5 (StarlinkMini/ether3), WAN6 (StarlinkTotin/ether4), WAN7 (Chuy1/ether5), WAN8 (Chuy2/ether6), WAN9 (StarlinkAurora/ether7)
+- **WANs deshabilitadas**: WAN3 (Presidencia40), WAN4 (Presidencia169), WAN10 (Chaviton/ether8 — 10 Mbps, no vale la pena)
+- **PCC**: Per-Connection Classifier src-address:8/x distribuyendo en 7 WANs activas (slot 7 de WAN10 vacío)
+- **QoS**: CAKE queue discipline por WAN + TLS SNI-based classification (reemplazó Layer 7) — ICMP/ACK p1, DNS/Gaming/VoIP p2, VideoCall/Chat p3, Video p6, Social p7
+- **Morosos**: perfil "Morosos" (64k/64k) + address-list + firewall drop + captive portal HTTP+HTTPS + allow UISP 443 (para que morosos reporten a UISP)
+- **Servicios deshabilitados**: FTP, Telnet, WWW, api-ssl, bandwidth-server
+- **SSH**: strong-crypto=yes, neighbor discovery deshabilitado
+- **Firewall**: input chain asegurada (established/related → drop invalid → accept servicios → drop-all), forward chain con drop-all al final, address-list `local-networks` (10.0.0.0/8 + 172.168.0.0/16)
+- **Mangle PCC fix**: regla `dst-address-type=local action=accept` antes de PCC rules para evitar que tráfico local sea enrutado por tablas PCC (que solo tienen default routes a WANs)
+- **NAT ZT→Infra**: masquerade `src=10.147.17.0/24 dst=10.1.1.0/24` para que dispositivos de infra (sin default gateway) puedan responder a tráfico ZeroTier
+- **Backups**: MikroTik crea backup diario local a las 3 AM, VPS lo jala via SCP a las 4:30 AM (cron), retención 14 días en `/root/backups/mikrotik/`
 
 ### MikroTik La Gloria
 - **IP**: 10.144.247.27
@@ -51,16 +57,28 @@ Migración de UISP desde servidor local (laptop 10.1.1.254) a VPS en la nube (Co
 ### Antenas Ubiquiti (clientes)
 - **Rango IP**: 10.10.1.x/24 (asignado por PPPoE)
 - **Gateway**: 10.10.0.1 (MikroTik)
-- **Firmware**: XW.v6.2.0 (airOS, julio 2019)
+- **Firmware**: XW.v6.3.24 (mayoría, actualizado 2026-02-17) / XW.v6.2.0 (algunas pendientes)
 - **OpenSSL**: 1.0.0 (libssl.so.1.0.0)
 - **Credenciales SSH**: ubnt/Auralink2021 o AURALINK/Auralink2021 o ubnt/Casimposible*7719Varce*1010
 - **SSH requiere**: `-o HostKeyAlgorithms=+ssh-rsa -o PubkeyAcceptedAlgorithms=+ssh-rsa`
 - **Total Ubiquiti en PPP**: 184
-- **Total en UISP**: 213 (incluye infraestructura)
+- **Total en UISP**: 207 (178 activos, 29 desconectados — incluye infraestructura)
 
 ### Infraestructura de red (10.1.1.x)
 - Equipos de infraestructura (APs, bridges, routers) en la red 10.1.1.x
 - Estos se conectan directamente al UISP (no via PPPoE)
+- **No tienen default gateway** — solo responden a tráfico del mismo /24 (por eso se necesita masquerade desde ZeroTier)
+- Accesibles via ZeroTier gracias a NAT masquerade + mangle PCC fix
+
+### ZeroTier - Red BalanceadorTomatlan
+- **Network ID**: 9f77fc393ecd131f
+- **API Token**: A4ZIMEclLHgZ4coje9hQFqQWfdwYUdJH (nombre: Claude-Code)
+- **API Base**: `https://api.zerotier.com/api/v1/`
+- **Auth header**: `Authorization: token A4ZIMEclLHgZ4coje9hQFqQWfdwYUdJH`
+- **Rutas managed**: `10.10.1.0/24 via 10.147.17.11`, `10.1.1.0/24 via 10.147.17.11`, `10.147.17.0/24` (directo)
+- **9 miembros**: Asus LAP (.101), VPS (.92), Servidor Aura (.155), Nuevo Servidor UISP (.243), Server UISP viejo (.73), GenesisPRO (.220), S24 (.120), Yesswera (.16), sin nombre (.91)
+- **MikroTik** (.11) usa cliente ZeroTier integrado de RouterOS — no aparece como miembro normal en Central API
+- **Endpoints API útiles**: GET `/network/{NWID}` (config red), GET `/network/{NWID}/member` (listar miembros), POST `/network/{NWID}/member/{ID}` (autorizar/desautorizar)
 
 ## UISP - Datos Importantes
 
@@ -75,16 +93,17 @@ Migración de UISP desde servidor local (laptop 10.1.1.254) a VPS en la nube (Co
 
 ### Connection String UISP
 ```
-wss://server.auralink.link:443+sBRaeWB1kiH4cxBIWmBTEyuxIIeULvidfT3s7UXpR2ZbapIV+allowSelfSignedCertificate
+wss://server.auralink.link:443+sBRaeWB1kiH4cxBIWmBTEyuxIIeULvidfT3s7UXpR2ZbapIV+allowUntrustedCertificate
 ```
+**Nota**: El flag correcto es `+allowUntrustedCertificate`, NO `+allowSelfSignedCertificate`.
 
 ### Certificado SSL
 - Let's Encrypt RSA (issuer R13) en `/home/unms/data/cert/live.crt` y `live.key`
 - Se cambió de ECDSA a RSA para compatibilidad con firmware viejo
 
 ### CRM
-- 261 clientes / 262 servicios (actualizado 2026-02-15 noche)
-- 225 sitios NMS endpoint (225 enlazados a CRM, 37 servicios sin enlace NMS)
+- 261 clientes / 262 servicios (actualizado 2026-02-17)
+- 224 sitios NMS endpoint (todos enlazados 1:1 a CRM, 38 servicios CRM sin enlace NMS)
 - 28 sitios NMS infraestructura
 - **CRM API Key** (X-Auth-App-Key): usa el token del .env, NO el de postgres
 - **Secuencias PostgreSQL**: se desincronizaron tras migración. Si da error 500 al crear suscriptor, resetear con: `SELECT setval('ucrm.SEQUENCE_NAME', (SELECT MAX(col) FROM ucrm.TABLE));`
@@ -152,6 +171,138 @@ wss://server.auralink.link:443+sBRaeWB1kiH4cxBIWmBTEyuxIIeULvidfT3s7UXpR2ZbapIV+
 ### 8. Dispositivo rogue "Elizabeth Pilitas" (2026-02-15 noche)
 **Causa**: Antena LiteBeam M5 (MAC 60:22:32:b2:c6:2c) con IP pública 12.13.3.155/22, conectada a SSID "WISP B&V 5G" (otro ISP). Se registró en UISP con connection string de AURALINK pero no pertenece a la red.
 **Solución**: Eliminada via API junto con su sitio huérfano "Pilitas".
+
+### 9. Fix masivo UISP: 60→178 dispositivos activos (2026-02-17)
+**Problema**: Solo 60 de 213 dispositivos aparecían activos en UISP. Al investigar, 41 antenas con PPPoE activo no reportaban a UISP.
+
+**Causas raíz descubiertas (3)**:
+1. **Firewall morosos bloqueaba UISP WebSocket**: La regla `drop src-address-list=morosos` en forward chain bloqueaba tráfico saliente a UISP (puerto 443). Las antenas de clientes morosos no podían conectar al WebSocket de UISP.
+2. **Firmware v6.2.0 incompatible**: El `udapi-bridge` de XW.v6.2.0 recibía "ws upgrade response not 101" al intentar conectar a UISP v3.0.151. El WebSocket handshake fallaba por incompatibilidad.
+3. **Encryption key desincronizada**: 20+ antenas tenían device-specific keys viejas que UISP no reconocía tras la migración. Requerían reset a master key.
+
+**Solución aplicada (3 rondas)**:
+- **Ronda 1**: Script masivo SSH → 41 targets, muchos fallos por timeout en morosos (64k/64k)
+- **Ronda 2**: Filtrado solo Ubiquiti MACs, ajustes SSH → mejoró pero aún fallos
+- **Ronda 3**: Regla firewall temporal para SSH morosos + heredoc approach → **14/14 éxito**
+
+**Acciones ejecutadas**:
+1. Regla firewall permanente en MikroTik: `chain=forward action=accept protocol=tcp src-address-list=morosos dst-address=217.216.85.65 dst-port=443` — permite que morosos reporten a UISP
+2. Reset master key en 20 antenas (reemplazó device-specific key vieja por master key en system.cfg)
+3. Eliminados 39 dispositivos fantasma adicionales via PostgreSQL (71 total en el día: 32 via API + 39 via BD)
+4. Reiniciados 5 contenedores `app-device-ws-*` para recargar datos de keys
+5. Autorizados 2 dispositivos nuevos (.116, .204)
+6. Actualizado firmware a XW.v6.3.24 en 10.10.1.122 + 14 antenas morosas (en background)
+7. Guardada config a flash en todas las antenas corregidas (`cfgmtd -w -p /etc/`)
+
+**Resultado**: 207 dispositivos en UISP, 178 activos (era 60 al inicio del día). 29 desconectados restantes son: ~14 en proceso de upgrade firmware, ~15 requieren acceso manual o tienen firmware no-Ubiquiti.
+
+**Dato clave SSH con MikroTik**: Para enviar comandos con `$` (como nombres de perfiles `$300 Basico`), usar heredoc pipe para evitar interpolación de shell a través de múltiples hops SSH:
+```bash
+cat << "SCRIPT" | ssh vps "ssh -o StrictHostKeyChecking=no admin@10.147.17.11"
+/ppp secret set [find where name=NOMBRE] profile="$300 Basico 3M/8M"
+SCRIPT
+```
+
+### 10. Clienteprueba migrado y deshabilitado (2026-02-17)
+**Problema**: 6 sesiones PPPoE usaban el secret compartido `clienteprueba` (riesgo de seguridad).
+**Hallazgo**: Los 6 clientes ya tenían secrets individuales creados por el admin. Las sesiones con `clienteprueba` eran porque las antenas aún no habían sido reconfiguradas.
+**Acciones**:
+1. Verificado que todos tienen secrets individuales con perfiles correctos
+2. Deshabilitado secret `clienteprueba` con flag `X` (disabled)
+3. Corregido perfil de `nicolasahumada`: estaba en `$800 Profesional` pero su plan CRM es `$300 Basico` → corregido a `$300 Basico 3M/8M`
+4. Confirmado `eliseovaldovinosr` en perfil `Morosos` (es correcto, está suspendido)
+
+**Secrets individuales creados por el admin:**
+| Secret | IP anterior clienteprueba | Perfil |
+|--------|--------------------------|--------|
+| josenicolasm | 10.10.1.119 | $300 Basico 3M/8M |
+| rafaelcalderon | 10.10.1.133 | $500 Residencial 4M/12M |
+| oscarepano | 10.10.1.212 | $500 Residencial 4M/12M |
+| briana_nava | 10.10.1.237 | $500 Residencial 4M/12M |
+| erickcumbre | 10.10.1.195 | $300 Basico 3M/8M |
+
+### 11. Decryption errors en loop: device-specific keys huérfanas (2026-02-17 noche)
+**Problema**: ~300 errores de decryption por hora en los 5 contenedores `app-device-ws-*`. Las antenas intentaban conectar cada ~2 minutos y fallaban constantemente.
+
+**Causa raíz**: Al eliminar dispositivos fantasma de la BD de UISP, se borraban las device-specific keys almacenadas del lado del servidor. Pero las antenas conservaban esas keys (terminan en `AAAAA`) en su `system.cfg`. Al reconectar:
+1. La antena encripta con su device-specific key vieja
+2. UISP no tiene esa key → intenta master key `sBRaeWB1kiH4cxBIWmBTEyuxIIeULvidfT3s7UXpR2ZbapIV`
+3. No coincide → "Decryption failed" → la antena reintenta en ~2 min → loop infinito
+
+**6 MACs ofensoras identificadas:**
+| MAC | IP | Tipo | Key error | Causa |
+|-----|-----|------|-----------|-------|
+| 60:22:32:b2:c6:2c | - | Rogue (Pilitas) | master key | Dispositivo externo (otro ISP) con connection string de AURALINK |
+| 60:22:32:b6:f5:64 | - | Phantom externo | master key | Dispositivo desconocido sin entrada en BD |
+| 28:70:4e:ae:07:25 | 10.10.1.146 | PPPoE (mireyajarac) | master key | Device key huérfana tras limpieza BD |
+| 28:70:4e:a8:07:b4 | 10.10.1.194 | PPPoE (landinc) | master key | Device key huérfana, sin acceso SSH |
+| f4:e2:c6:94:6f:88 | 10.1.1.231 | Infra | device key | Key en BD corrupta/desincronizada |
+| e4:38:83:b2:b9:89 | 10.1.1.229 | Infra | device key | Key en BD corrupta/desincronizada |
+
+**Solución aplicada:**
+1. Eliminados 22 dispositivos fantasma (unauthorized + disconnected) de la BD
+2. Reseteadas device keys corruptas en BD para 2 infra devices (SET key=NULL, key_exchange_status=NULL)
+3. Reset key a master key en system.cfg de 3 antenas accesibles (.146, 10.1.1.231, 10.1.1.229)
+4. Reiniciados 5 contenedores `app-device-ws-*` para recargar datos de keys
+5. Guardada config a flash en las 3 antenas (`cfgmtd -w -p /etc/`)
+
+**Resultado**: Errores de decryption: **~300/hora → ~4/minuto** (97% reducción). Los 2 restantes son 1 dispositivo externo incontrolable + 1 antena sin acceso SSH.
+
+**Prevención futura**: Antes de eliminar un dispositivo de la BD de UISP, si la antena sigue activa, primero resetear su key en `system.cfg` al master key. Si no es posible acceder a la antena, al menos anotar que necesitará reset de key cuando sea accesible.
+
+**Cómo diagnosticar**: `docker logs app-device-ws-1 --since 1h 2>&1 | grep "Decryption failed" | grep -oP 'mac":"[^"]+"' | sort | uniq -c | sort -rn`
+
+**Cómo arreglar una antena específica**:
+```bash
+# 1. SSH a la antena y resetear key
+sshpass -p "Auralink2021" ssh [SSH_OPTS] ubnt@IP "
+sed -i 's|unms.uri=.*|unms.uri=wss://server.auralink.link:443+sBRaeWB1kiH4cxBIWmBTEyuxIIeULvidfT3s7UXpR2ZbapIV+allowUntrustedCertificate|' /tmp/system.cfg
+cfgmtd -w -p /etc/
+rm -f /tmp/running.cfg
+killall -9 udapi-bridge"
+# 2. Si tiene device key corrupta en BD:
+# UPDATE unms.device SET key=NULL, key_exchange_status=NULL WHERE mac='XX:XX:XX:XX:XX:XX';
+```
+
+### 12. Fix masivo device-specific key desync (2026-02-18)
+**Problema**: 28 dispositivos desconectados de UISP a pesar de tener internet funcional (PPPoE activo, ping OK). Muchos con device-specific keys (terminan en AAAAA) en su system.cfg pero key=NULL en la BD de UISP.
+
+**Causas raíz encontradas (3)**:
+1. **Device-specific key desync** (principal): Al limpiar fantasmas de la BD, se eliminaron las device keys del servidor. Las antenas seguían enviando con su key vieja → "Decryption failed using master key" → loop 30s.
+2. **PCC routing para infra**: Tráfico de 10.1.1.x al VPS (217.216.85.65) era ruteado por PCC a WANs Starlink con CGNAT, que bloqueaban la conexión WebSocket.
+3. **Missing running.cfg**: `udapi-bridge` necesita `/tmp/running.cfg` para almacenar nuevos connection strings tras key exchange.
+
+**Fix aplicado masivamente**:
+```bash
+# 1. Limpiar known_hosts (host keys cambian tras reboot)
+ssh-keygen -f /root/.ssh/known_hosts -R <IP>
+# 2. Reset a master key + guardar + recrear running.cfg + restart
+sed -i "s|unms.uri=.*|unms.uri=wss://server.auralink.link:443+sBRaeWB1kiH4cxBIWmBTEyuxIIeULvidfT3s7UXpR2ZbapIV+allowUntrustedCertificate|" /tmp/system.cfg
+cfgmtd -w -p /etc/
+rm -f /tmp/running.cfg && cp /tmp/system.cfg /tmp/running.cfg
+killall -9 udapi-bridge
+```
+
+**Fix infra adicional**: Mangle rule `Infra-to-UISP-via-WAN8` — fuerza todo tráfico de 10.1.1.0/24 a address-list `uisp-server` (217.216.85.65) por WAN8 (Chuy2, IP pública real sin CGNAT).
+
+**Resultado**: 155 activos → 179 activos (+24 recuperados). Solo 5 desconectados restantes.
+
+**Dato clave**: Tras el fix, UISP hace key exchange nuevo y asigna device-specific key fresca. La antena reconecta en ~30 segundos. No requiere reboot (solo restart udapi-bridge), pero el reboot confirma persistencia.
+
+### 13. MikroTik como Third Party en UISP (2026-02-18)
+- Descubierto automáticamente como tipo `blackBox` en IP 10.1.1.1
+- Autorizado via API: `POST /devices/{id}/authorize` con siteId de Matriz Tomatlan
+- Nombre asignado: "MikroTik RB5009 Balanceador"
+- UISP monitorea por ping (connected=true)
+- VPS alcanza MikroTik via ZeroTier (10.147.17.11) y via 10.1.1.1
+
+### 14. Ping Watchdog confirmado en red (2026-02-18)
+- Script `/root/enable-watchdog.sh` en VPS para deploy masivo
+- Resultado: **175/176 antenas ya tenían watchdog habilitado** (configuración original del ISP)
+- Config: `wpsd.status=enabled`, `wpsd.ip=<gateway>`, `wpsd.delay=300`, `wpsd.period=300`, `wpsd.retry=3`
+- Clientes (10.10.1.x): ping target = 10.10.0.1 (MikroTik PPPoE)
+- Infra (10.1.1.x): ping target = 10.1.1.1 (MikroTik LAN)
+- Tolerancia: 15 minutos sin respuesta antes de auto-reboot (seguro ante mantenimiento MikroTik de 2-3 min)
 
 ## Archivos Importantes en este Repositorio
 
@@ -391,14 +542,14 @@ Cuando un cliente es suspendido, al intentar navegar ve una página de aviso en 
 **Portal HTML (VPS):**
 - **Ubicación VPS**: `/root/morosos-portal/` (docker-compose.yml + index.html + nginx.conf)
 - **Ubicación local**: `C:\claude2\morosos-portal\`
-- **Container**: `morosos-portal` (nginx:alpine, puerto 8088, restart: unless-stopped)
-- **Contenido**: Aviso "Servicio Suspendido", cargo reconexión $80, datos BBVA (cuenta/tarjeta/CLABE con botones copiar), pasos para reactivar, nombre del bot @auralinkmonitor_bot copiable (sin link — el mini-browser captivo no puede abrir apps)
-- **Captive portal detection**: Intercepta URLs de conectividad de Android (`/generate_204`), iOS (`/hotspot-detect.html`), Windows (`/connecttest.txt`), Firefox (`/success.txt`) → redirect al portal
-- **Nota**: Links `https://t.me/` y `tg://` NO funcionan en el mini-browser del portal cautivo de Android/iOS. Solo se muestra texto copiable para que el cliente busque el bot manualmente en Telegram.
+- **Container**: `morosos-portal` (nginx:alpine, puertos 8088:80 + 8443:443, restart: unless-stopped)
+- **HTTPS**: Self-signed cert (`selfsigned.crt/key`) para interceptar tráfico HTTPS — browser muestra warning pero carga portal
+- **Contenido**: Aviso "Servicio Suspendido", cargo reconexión $80, datos BBVA (cuenta/tarjeta/CLABE con botones copiar), pasos para reactivar, nombre del bot @auralinkmonitor_bot copiable
+- **Captive portal detection**: Intercepta URLs de conectividad de Android, iOS, Windows, Firefox → redirect al portal (HTTP y HTTPS)
+- **NAT rules**: dst-nat port 80→VPS:8088, skip Telegram 443, dst-nat port 443→VPS:8443
+- **Forward rules**: allow VPS:8088, allow VPS:8443, allow Telegram, allow DNS, drop morosos
 
-**Estado actual**: 15 clientes en address-list "morosos" (14 reales + aurora test), portal corriendo y sirviendo página. Sync-morosos scheduler activo (cada 1 min). DNS + Telegram permitidos para morosos.
-
-**Limitación conocida**: HTTPS no se puede redirigir (rompe TLS), pero las detecciones de captive portal de los SO sí disparan la página automáticamente. El botón de Telegram funciona porque se permiten DNS (resolución t.me) y HTTPS a IPs de Telegram (address-list `telegram-servers`). Si el browser captivo no soporta deep links, la página muestra instrucciones alternativas: buscar @auralinkmonitor_bot o "AURA" en Telegram.
+**Estado actual**: 15 clientes en address-list "morosos", portal corriendo HTTP+HTTPS. Sync-morosos scheduler activo (cada 1 min). DNS + Telegram + UISP (443) permitidos.
 
 ## Auditoría MikroTik RB5009 (2026-02-17)
 
@@ -439,6 +590,24 @@ Cuando un cliente es suspendido, al intentar navegar ve una página de aviso en 
 
 **Rutas stale eliminadas:** 3 rutas con gateways obsoletos (192.168.12.1, 192.168.11.1, 192.168.8.1)
 
+**CRITICO 5 — PCC hijacking tráfico local (2026-02-17 noche):**
+- Las mangle PCC rules (`in-interface=SFP-LAN, connection-mark=no-mark`) marcaban tráfico destinado al MikroTik (10.1.1.1) con routing marks (to_isp1, to_isp2, etc.)
+- Las tablas PCC solo tienen `0.0.0.0/0 → WAN gateway` — NO tienen rutas locales
+- Resultado: replies ICMP/TCP de dispositivos de infra (10.1.1.x) se enviaban por una WAN en vez de entregarse localmente
+- **Diagnóstico**: sniffer en SFP-LAN mostraba que los replies LLEGABAN pero el ping reportaba timeout. ARP-ping (Layer 2) funcionaba, ICMP ping (Layer 3) no.
+- **Fix**: `/ip firewall mangle add chain=prerouting dst-address-type=local action=accept` antes de las reglas PCC
+- Esto excluye tráfico local del PCC, permitiendo entrega correcta al IP stack
+
+**ALTA — Dispositivos infra sin gateway (2026-02-17 noche):**
+- Los equipos de infraestructura (10.1.1.x) no tienen default gateway configurado
+- Solo responden a tráfico de su mismo /24, no pueden rutear responses a 10.147.17.x (ZeroTier)
+- **Fix**: NAT masquerade `src-address=10.147.17.0/24 dst-address=10.1.1.0/24`
+- El tráfico desde ZeroTier aparece como 10.1.1.1 (MikroTik) para los dispositivos
+
+**MEDIA — Input chain order incorrecto (2026-02-17 noche):**
+- "Drop Invalid Input" (rule 8) estaba antes de "Accept Established/Related" (rule 13)
+- Corregido: established/related ahora va primero en la cadena input
+
 ### Estado post-auditoria Queue Tree
 
 | WAN | Queue | CAKE max-limit | Estado |
@@ -454,59 +623,63 @@ Cuando un cliente es suspendido, al intentar navegar ve una página de aviso en 
 | WAN9 (StarlinkAurora) | WAN9-Download | 180M | OK |
 | WAN10 (Chaviton) | WAN10 | 100M | OK |
 
-### PPP Profiles
+### PPP Profiles (actualizado 2026-02-17)
 
-| Perfil | Rate Limit | Precio |
-|--------|-----------|--------|
-| default | - | - |
-| $300 Basico | 4M/10M | $300 |
-| $500 Residencial | 5M/15M | $500 |
-| $800 Profesional | 6M/18M | $800 |
-| $1000 Empresarial | 10M/22M | $1,000 |
-| Morosos | 64k/64k | Suspendido |
-| Tecnologico | 10M/30M | Especial |
-| Casas Nodos | 10M/20M | Especial |
-| 20Mb | 20M/20M | Especial |
+| Perfil | Rate Limit | CRM Plan | Overshoot |
+|--------|-----------|----------|-----------|
+| $300 Basico 3M/8M | 4M/10M | Basico $300 (3M/8M) | 33%/25% |
+| $500 Residencial 4M/12M | 5M/15M | Residencial $500 (4M/12M) | 25%/25% |
+| $800 Profesional 5M/15M | 6M/18M | Profesional $800 (5M/15M) | 20%/20% |
+| $1000 Empresarial 8M/20M | 10M/25M | Empresarial $1,000 (8M/20M) | 25%/25% |
+| Morosos | 64k/64k | Suspendido | - |
+| Casas Nodos | 3M/4M | Especial | - |
+| 20Mb | 10M/20M | Especial | - |
+| default / default_Matriz | - | Nodos | - |
+| cruz | - | Cruz de Loreto | - |
+
+Perfiles eliminados (0 usuarios): Tecnologico, teque, simétrico
 
 ### Pendientes MikroTik
-- [ ] Recalcular PCC divisor (actualmente :7 con 2 WANs muertas, ideal :8 para 8 WANs activas)
+- [x] Recalcular PCC divisor — actualizado a :8, 7 WANs activas + WAN10 deshabilitado
+- [x] Expandir pool PPPoE — expandido a 506 IPs (10.10.1.2-254 + 10.10.2.2-254)
+- [x] Limpiar config WAN3/WAN4 — rutas eliminadas, schedulers retry deshabilitados, netwatch deshabilitado
+- [x] Fix backups — email deshabilitado, VPS jala por SCP diario (cron 4:30 AM)
+- [x] Layer 7 QoS — reemplazado con TLS SNI matching (7 reglas mangle)
+- [x] Firewall forward chain — drop-all al final, address-list local-networks
+- [x] Servicios inseguros deshabilitados — FTP, Telnet, WWW, api-ssl, bandwidth-server
+- [x] SSH strong-crypto + neighbor discovery off + user py deshabilitado
+- [x] Portal morosos HTTPS — self-signed cert en VPS:8443, NAT redirect con bypass Telegram
+- [x] Perfiles PPP — Empresarial bumped a 10M/25M, 3 perfiles sin uso eliminados
 - [ ] Migrar red 172.168.x.x a rango RFC1918 correcto (172.16-31.x.x)
-- [ ] Limpiar config WAN3/WAN4 (scripts, mangle, routes) o mantener para reconexion futura
-- [ ] Expandir pool PPPoE si se acercan a 253 clientes
-- [ ] Fix/remover scripts de backup por email (SMTP config rota)
-- [ ] 17 antenas con RPC timeout pendientes de investigar
+- [x] 17 antenas con RPC timeout — 10 resueltas con fix masivo + firmware upgrade, 7 aún desconectadas
 
-## Auditoría UISP (2026-02-15)
+## Auditoría UISP (2026-02-15 → actualizada 2026-02-17)
 
 ### Análisis cruzado PPPoE ↔ CRM ↔ NMS
-- **225/262 CRM servicios enlazados a endpoints NMS** — 86% cobertura (37 sin enlace)
+- **224/262 CRM servicios enlazados a endpoints NMS** — todos los 224 sitios NMS endpoint enlazados 1:1 (0 duplicados, 0 huérfanos)
+- **38 servicios CRM sin enlace NMS** — clientes sin antena registrada en UISP o con antena aún desconectada
+- **2 "Luz Mariscal"** en CRM: no son duplicados, son direcciones distintas (Nahuapa vs otro)
 - Se eliminaron 4 endpoints huérfanos en auditoría previa: Olivia Cumbre, Alma Gloria, Enrique Pulido, Tule Mabel
 - **Duplicado CRM #254 (Kareli Meza Coco)** eliminado ($0 balance, sin servicio)
 - **Naming consistente**: NMS usa "Zona, Nombre" / CRM usa "Nombre Zona" — todos hacen match
-- **13 clientes nuevos** agregados al CRM desde la auditoría original (248→261)
-- **23 endpoints NMS eliminados** (248→225) — posible consolidación
 
 ### PPPoE
-- 255 secrets total (actualizado 2026-02-15 noche)
-- ~201 sesiones activas
-- 6 sesiones "clienteprueba" (secret compartido para instalaciones nuevas)
-- 18 clientes en perfil "Morosos" conectados (revisar)
+- 254 secrets total (clienteprueba deshabilitado, actualizado 2026-02-17)
+- ~196 sesiones activas
+- 0 sesiones "clienteprueba" — secret deshabilitado, todos migrados a individuales
+- 15 clientes en perfil "Morosos" (confirmados legítimos)
 
-### Clienteprueba identificados
-| IP | Cliente | Estado UISP |
-|----|---------|-------------|
-| 10.10.1.119 | Jose Nicolas Mariscal | En UISP, activo |
-| 10.10.1.133 | Calderon | En UISP, activo |
-| 10.10.1.212 | Oscar Eduardo Pano | NO en UISP |
-| 10.10.1.237 | Briana Nava | En UISP, unauthorized |
-| 10.10.1.195 | Erick Cumbre | En UISP, unauthorized |
-| 10.10.1.170 | Desconocido (SSID: Wisp B&V Recursos Sur) | NO en UISP |
+### Clienteprueba — RESUELTO (2026-02-17)
+Todos los 6 clientes que usaban `clienteprueba` ya tienen secrets individuales. El secret compartido fue deshabilitado.
+Ver detalle en Problema Resuelto #10.
 
-### Limpieza realizada
-- Eliminados 20 dispositivos fantasma (MACs sin nombre/IP/UUID, key desincronizada)
+### Limpieza realizada (acumulado)
+- Eliminados **71 dispositivos fantasma** total (32 via API + 39 via PostgreSQL)
 - Eliminados 4 endpoints NMS huérfanos
 - Eliminado 1 duplicado CRM
 - Corregidas ~20 secuencias PostgreSQL del CRM
+- Autorización de 2 dispositivos nuevos (.116, .204)
+- Firmware upgrade masivo a XW.v6.3.24 (15+ antenas)
 
 ## Pendientes
 
@@ -515,16 +688,16 @@ Cuando un cliente es suspendido, al intentar navegar ve una página de aviso en 
 - [x] Agente IA para UISP (Telegram Bot + Python) — implementado como Aura Bot
 - [x] Deploy Aura Bot en VPS (Docker) — corriendo en 217.216.85.65
 - [x] Sistema de monitoreo proactivo — implementado y corriendo
-- [ ] Crear PPPoE secrets individuales para 6 clienteprueba
-- [ ] Revisar 18 morosos conectados (perfil Morosos en MikroTik)
+- [x] Crear PPPoE secrets individuales para 6 clienteprueba — ya estaban creados por admin, clienteprueba deshabilitado
+- [x] Revisar morosos conectados — 15 confirmados legítimos
 - [ ] Probar diferenciacion admin/cliente en system prompt
 - [x] Flujo /vincular mejorado con zonas, fuzzy match y ID de servicio — implementado
 - [x] Renombrar bot en BotFather a "AURA" — hecho
-- [ ] ~16 dispositivos desconectados pendientes de revisar (+5 nuevos)
-- [ ] 3 dispositivos unauthorized con nombre: Rafael Rodriguez, Eliseo Hernandez, Miriam Cumbre
-- [ ] 3 dispositivos con status "unknown" — investigar
-- [ ] 37 servicios CRM sin enlace a endpoint NMS — enlazar o revisar
-- [ ] Investigar por qué se redujeron endpoints NMS de 248 a 225
+- [x] Fix masivo UISP — 60→179 activos (97%), device-specific key desync fue causa raíz principal
+- [x] 71 fantasmas eliminados — 32 via API + 39 via PostgreSQL
+- [x] Fix keys sesión 02-18 — +24 dispositivos recuperados (155→179), reset master key masivo
+- [ ] 5 dispositivos desconectados — 1 credenciales custom (10.1.1.211), 4 pendientes revisar
+- [ ] 38 servicios CRM sin enlace a endpoint NMS — enlazar o revisar
 - [x] Sistema de cobranza automatizada — implementado y desplegado
 - [x] Deploy cobranza en VPS — corriendo con BILLING_START_MONTH=2026-04
 - [x] Docker volume para data/ — ya mapeado en docker-compose.yml
@@ -535,8 +708,22 @@ Cuando un cliente es suspendido, al intentar navegar ve una página de aviso en 
 - [x] Portal cautivo morosos — página HTML, NAT redirect, captive portal detection
 - [x] Sync-morosos scheduler — sincroniza address-list cada 1 min al cambiar perfil mid-session
 - [x] Telegram permitido para morosos — address-list telegram-servers + firewall rule
-- [ ] Recalcular PCC divisor para 8 WANs activas (actualmente :7)
+- [x] Recalcular PCC divisor — :8 con 7 WANs activas (WAN10 deshabilitado, slot 7 vacío)
 - [ ] Migrar red 172.168.x.x a RFC1918 correcto
+- [x] Fix PCC hijacking tráfico local — mangle dst-address-type=local accept
+- [x] Fix ZeroTier acceso a infra 10.1.1.x — NAT masquerade + PCC local fix
+- [x] ZeroTier API configurada — token Claude-Code para gestión REST
+- [x] Aura Bot 14 fixes desplegados en VPS — container healthy
+- [x] Regla firewall morosos→UISP — permite que morosos reporten a UISP (443)
+- [x] Firmware upgrade masivo a XW.v6.3.24 — 15+ antenas actualizadas
+- [x] nicolasahumada perfil corregido — $800→$300 Basico 3M/8M
+- [x] Firmware upgrades morosos — 3/14 actualizadas a v6.3.24, 2 son AC (no aplica XW), 9 sin acceso SSH
+- [x] Decryption errors reducidos 97% — 22 phantoms eliminados, 3 keys reseteadas, 2 DB keys limpiadas
+- [ ] ~53 antenas con credenciales SSH desconocidas — requieren acceso web/físico
+- [ ] 172.168.x.x — removido de local-networks, pendiente migrar a RFC1918 correcto
+- [x] Ping Watchdog verificado — 175/176 antenas ya lo tenían activo (target=gateway, period=300s, retry=3)
+- [x] MikroTik en UISP — agregado como Third Party (blackBox) en Matriz Tomatlan
+- [x] Mangle Infra→UISP — fuerza tráfico infra al VPS por WAN8 (evita CGNAT Starlink)
 
 ## Planes de servicio (UISP CRM)
 
@@ -561,18 +748,23 @@ Solo los 4 planes principales reciben avisos automaticos de cobranza y suspensio
 
 Estos datos se envian automaticamente en los recordatorios (dia 3), advertencia (dia 7) y aviso de suspension (dia 8).
 
-## Estado Actual (2026-02-17)
-- **205 dispositivos** en UISP: 187 activos, 15 desconectados, 3 unknown
-- **3 dispositivos autorizados**: Rafael Rodriguez, Eliseo Hernandez, Miriam Cumbre
-- **17 antenas con RPC timeout** — decryption fix aplicado, key exchange funciona, pendiente RPC
-- **261 CRM clientes / 262 servicios** — 225 enlazados a NMS endpoints (37 sin enlace)
-- **224 endpoints NMS + 27 infra** = 251 sitios total
-- **255 PPPoE secrets**, ~198 sesiones activas
+## Estado Actual (2026-02-18 — post fix masivo keys)
+- **184 dispositivos** en UISP: **179 activos** (97%), 5 desconectados, 0 fantasmas
+- **Mejora sesión 02-18**: de 155 activos a 179 activos (+24 recuperados), de 28 desconectados a 5
+- **Causa raíz principal**: device-specific key desync — antenas tenían keys AAAAA pero DB tenía key=NULL tras limpieza de fantasmas. Fix: reset a master key + restart udapi-bridge
+- **261 CRM clientes / 262 servicios** — 224 enlazados 1:1 a NMS endpoints (38 sin enlace)
+- **254 PPPoE secrets** (~198 sesiones activas), clienteprueba deshabilitado, pool 506 IPs
+- **Ping Watchdog**: confirmado activo en 175/176 antenas (period=300s, retry=3, delay=300s)
+- **MikroTik en UISP**: agregado como Third Party (blackBox) en sitio Matriz Tomatlan, IP 10.1.1.1
+- **Infra PCC fix**: mangle `Infra-to-UISP-via-WAN8` fuerza tráfico 10.1.1.0/24→UISP por WAN8 (evita CGNAT Starlink)
 - **SSH sin contraseña** configurado para VPS, Aura y MikroTik
-- **Aura Bot "AURA"** en produccion en VPS con Docker (container: aura-bot, @auralinkmonitor_bot)
+- **Aura Bot "AURA"** en produccion en VPS con Docker (14 fixes aplicados y desplegados, container healthy)
 - **Signup autoservicio**: /vincular con zonas, fuzzy match, ID de servicio (ZONA-ID)
 - **Monitor de red** corriendo (25 zonas, 172 endpoints, polling cada 2 min)
 - **Sistema de cobranza** activo (dia 1/3/7/8, Vision IA, fraude, suspension, BILLING_START_MONTH=2026-04)
 - **Certificado SSL**: Let's Encrypt RSA válido hasta mayo 2026
-- **MikroTik auditado** (2026-02-17): PCC funcional en 8 WANs, firewall asegurado, QoS CAKE en todas las WANs, morosos script corregido, auto-recovery de WANs operativo
-- **Portal morosos** operativo: captive portal con redirect, sync-morosos cada 1 min, Telegram permitido para morosos
+- **MikroTik hardened** (2026-02-17): PCC :8 en 7 WANs, firewall asegurado con drop-all, QoS TLS SNI, backups a VPS, servicios inseguros deshabilitados
+- **Portal morosos** operativo: HTTP + HTTPS redirect, sync-morosos cada 1 min, Telegram permitido
+- **Backups automatizados**: MikroTik + Aura DB a VPS diario (cron 4:30/4:35 AM), retención 14 días
+- **5 desconectados restantes**: 10.1.1.211 (credenciales custom), 10.10.1.150, .171, .180, .227 (pendientes)
+- **~53 antenas con credenciales SSH desconocidas** — ninguno de los 3 combos funciona, requieren acceso web/físico
