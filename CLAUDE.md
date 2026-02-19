@@ -661,6 +661,20 @@ Cuando un cliente es suspendido, al intentar navegar ve una página de aviso en 
 **33 dispositivos fantasma UISP eliminados:**
 - `DELETE FROM unms.device WHERE name IS NULL AND connected=false AND authorized=false` → 33 rows
 
+**172.168.x.x sin internet — RESUELTO (2026-02-18 noche):**
+- `172.168.0.0/16` fue removido de address-list `local-networks` en sesión anterior (pendiente de migrar a RFC1918)
+- Firewall rule 30 (`accept new src-address-list=local-networks`) dejó de matchear tráfico 172.168.x.x
+- Tráfico caía a rule 33 (drop-all) → clientes sin internet
+- **Fix**: Re-agregado `172.168.0.0/16` a `local-networks` — internet restaurado inmediatamente
+
+**Enlace PtP AP Tomatlan-Colmena ↔ ST Colmenares optimizado (2026-02-18 noche):**
+- Equipos: 2x Rocket 5AC Lite con dishes 34 dBi, distancia 10 km
+- IPs: AP 10.1.1.253, Station 10.1.1.252
+- Credenciales: AURALINK / Auralink2021
+- Cambios aplicados: PTMP → PtP, 40 MHz → 80 MHz, deshabilitado 11ac/11n compat
+- Frecuencia cambió automáticamente de 5905 a 5830 MHz (DFS)
+- Resultados: TX rate +93% (243→468 Mbps), downlink capacity +88% (132→248 Mbps), CPU AP -23% (84→61%), latencia 10ms→0ms
+
 **CRITICO 5 — PCC hijacking tráfico local (2026-02-17 noche):**
 - Las mangle PCC rules (`in-interface=SFP-LAN, connection-mark=no-mark`) marcaban tráfico destinado al MikroTik (10.1.1.1) con routing marks (to_isp1, to_isp2, etc.)
 - Las tablas PCC solo tienen `0.0.0.0/0 → WAN gateway` — NO tienen rutas locales
@@ -780,7 +794,7 @@ Ver detalle en Problema Resuelto #10.
 - [x] Sync-morosos scheduler — sincroniza address-list cada 1 min al cambiar perfil mid-session
 - [x] Telegram permitido para morosos — address-list telegram-servers + firewall rule
 - [x] Recalcular PCC divisor — :8 con 7 WANs activas (WAN10 deshabilitado, slot 7 vacío)
-- [ ] Migrar red 172.168.x.x a RFC1918 correcto
+- [ ] Migrar red 172.168.x.x a RFC1918 correcto (172.168.0.0/16 re-agregado a local-networks como fix temporal)
 - [x] Fix PCC hijacking tráfico local — mangle dst-address-type=local accept
 - [x] Fix ZeroTier acceso a infra 10.1.1.x — NAT masquerade + PCC local fix
 - [x] ZeroTier API configurada — token Claude-Code para gestión REST
@@ -832,4 +846,6 @@ Estos datos se envian automaticamente en los recordatorios (dia 3), advertencia 
 - **Backups automatizados**: MikroTik + Aura DB a VPS diario (cron 4:30/4:35 AM), retencion 14 dias
 - **5 desconectados restantes**: 10.1.1.211 (credenciales custom), 10.10.1.150, .171, .180, .227
 - **~53 antenas con credenciales SSH desconocidas** — requieren acceso web/fisico
+- **Enlace PtP optimizado**: AP Tomatlan-Colmena ↔ ST Colmenares — PtP+80MHz, capacity 248 Mbps (+88%)
+- **172.168.x.x restaurado**: re-agregado a local-networks (fix temporal hasta migrar a RFC1918)
 - **Prioridad**: vincular clientes a Telegram antes de abril (0 vinculados actualmente)
