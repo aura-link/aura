@@ -3,6 +3,7 @@
 __pycache__/
 .env
 # Sensitive
+.claude/settings.local.json
 wireguard_configs/
 wireguard_configs.zip
 wireguard_oc200.conf

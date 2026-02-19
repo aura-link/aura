@@ -47,6 +47,8 @@ Migración de UISP desde servidor local (laptop 10.1.1.254) a VPS en la nube (Co
 - **SSH**: strong-crypto=yes, neighbor discovery deshabilitado
 - **Firewall**: input chain asegurada (established/related → drop invalid → accept servicios → drop-all), forward chain con drop-all al final, address-list `local-networks` (10.0.0.0/8 + 172.168.0.0/16)
 - **Mangle PCC fix**: regla `dst-address-type=local action=accept` antes de PCC rules para evitar que tráfico local sea enrutado por tablas PCC (que solo tienen default routes a WANs)
+- **Mangle Skip-PCC-for-UISP-VPS**: `chain=prerouting action=accept dst-address=217.216.85.65 in-interface=SFP-LAN` — bypasea PCC para tráfico de antenas al VPS, forzando uso de ruta estática ZeroTier
+- **Ruta estática UISP VPS**: `217.216.85.65/32 via 10.147.17.92` (ZeroTier) — todo tráfico al VPS va por túnel ZeroTier (~90-130ms), independiente de PCC/WANs
 - **NAT ZT→Infra**: masquerade `src=10.147.17.0/24 dst=10.1.1.0/24` para que dispositivos de infra (sin default gateway) puedan responder a tráfico ZeroTier
 - **Backups**: MikroTik crea backup diario local a las 3 AM, VPS lo jala via SCP a las 4:30 AM (cron), retención 14 días en `/root/backups/mikrotik/`
 
@@ -62,7 +64,7 @@ Migración de UISP desde servidor local (laptop 10.1.1.254) a VPS en la nube (Co
 - **Credenciales SSH**: ubnt/Auralink2021 o AURALINK/Auralink2021 o ubnt/Casimposible*7719Varce*1010
 - **SSH requiere**: `-o HostKeyAlgorithms=+ssh-rsa -o PubkeyAcceptedAlgorithms=+ssh-rsa`
 - **Total Ubiquiti en PPP**: 184
-- **Total en UISP**: 207 (178 activos, 29 desconectados — incluye infraestructura)
+- **Total en UISP**: 219 (182 conectados, 5 desconectados autorizados, 32 desconectados no autorizados — incluye infraestructura)
 
 ### Infraestructura de red (10.1.1.x)
 - Equipos de infraestructura (APs, bridges, routers) en la red 10.1.1.x
@@ -76,6 +78,7 @@ Migración de UISP desde servidor local (laptop 10.1.1.254) a VPS en la nube (Co
 - **API Base**: `https://api.zerotier.com/api/v1/`
 - **Auth header**: `Authorization: token A4ZIMEclLHgZ4coje9hQFqQWfdwYUdJH`
 - **Rutas managed**: `10.10.1.0/24 via 10.147.17.11`, `10.1.1.0/24 via 10.147.17.11`, `10.147.17.0/24` (directo)
+- **Ruta MikroTik estática**: `217.216.85.65/32 via 10.147.17.92` — asegura que todo tráfico de antenas al VPS pase por ZeroTier (bypass PCC)
 - **9 miembros**: Asus LAP (.101), VPS (.92), Servidor Aura (.155), Nuevo Servidor UISP (.243), Server UISP viejo (.73), GenesisPRO (.220), S24 (.120), Yesswera (.16), sin nombre (.91)
 - **MikroTik** (.11) usa cliente ZeroTier integrado de RouterOS — no aparece como miembro normal en Central API
 - **Endpoints API útiles**: GET `/network/{NWID}` (config red), GET `/network/{NWID}/member` (listar miembros), POST `/network/{NWID}/member/{ID}` (autorizar/desautorizar)
@@ -95,7 +98,7 @@ Migración de UISP desde servidor local (laptop 10.1.1.254) a VPS en la nube (Co
 ```
 wss://server.auralink.link:443+sBRaeWB1kiH4cxBIWmBTEyuxIIeULvidfT3s7UXpR2ZbapIV+allowUntrustedCertificate
 ```
-**Nota**: El flag correcto es `+allowUntrustedCertificate`, NO `+allowSelfSignedCertificate`.
+**Nota**: El flag correcto es `+allowUntrustedCertificate`, NO `+allowSelfSignedCertificate`. UISP v3.0.151 tenía un bug que mostraba el flag incorrecto en la UI — corregido manualmente en 4 archivos del contenedor `unms-api` (ver Problema #16). Tras actualizaciones de UISP, verificar que no regrese el bug.
 
 ### Certificado SSL
 - Let's Encrypt RSA (issuer R13) en `/home/unms/data/cert/live.crt` y `live.key`
@@ -304,6 +307,57 @@ killall -9 udapi-bridge
 - Infra (10.1.1.x): ping target = 10.1.1.1 (MikroTik LAN)
 - Tolerancia: 15 minutos sin respuesta antes de auto-reboot (seguro ante mantenimiento MikroTik de 2-3 min)
 
+### 15. 35 antenas UISP desconectadas por PCC routing (2026-02-19)
+**Problema**: Cross-reference PPPoE ↔ UISP reveló 35 antenas con internet funcional (PPPoE activo) pero desconectadas de UISP. Adicionalmente, 48 antenas con PPPoE activo no tenían ninguna entrada en UISP.
+
+**Causa raíz**: PCC load balancing enviaba el tráfico de las antenas al VPS (217.216.85.65) por WANs con CGNAT (Starlink) u otras WANs que no podían alcanzar el VPS. Ping desde antenas desconectadas al VPS = 100% packet loss. Antenas que sí conectaban a UISP tenían WANs con ruta funcional al VPS.
+
+**Diagnóstico**: SSH a antenas desconectadas y `ping 217.216.85.65` → 0% success. SSH a antenas conectadas → 100% success. La diferencia era qué WAN les asignaba PCC.
+
+**Solución permanente (2 partes)**:
+1. **Mangle bypass PCC**: `chain=prerouting action=accept dst-address=217.216.85.65 in-interface=SFP-LAN comment="Skip-PCC-for-UISP-VPS"` — colocada antes de las reglas PCC. Impide que PCC marque tráfico al VPS, forzando uso de tabla de ruteo principal.
+2. **Ruta estática ZeroTier**: `217.216.85.65/32 via 10.147.17.92 comment="UISP-VPS-via-ZeroTier"` — todo tráfico al VPS va por túnel ZeroTier (latencia ~90-130ms, pero 100% confiable).
+
+**Ejecución**:
+- Batch 1: 16 antenas (12 fixed, 4 failed credentials)
+- Batch 2: 19 antenas (10 fixed, 9 failed credentials)
+- Post-ZeroTier route: 31 antenas restantes reiniciadas (28 OK, 3 failed credentials)
+- 3 restantes arregladas manualmente (Magda Mora, Ana Esther, Jose Nicolas)
+
+**Caso especial 10.10.1.53 (Jose Nicolas Mariscal)**:
+- Tenía `failed_decryption=true` en BD → DELETE entry + reset master key
+- Después: `udapi-bridge` entraba en loop `"cannot read file /tmp/running.cfg"` → `"failed to store new connection string"` → desconexión
+- **Descubrimiento**: `udapi-bridge` NECESITA `/tmp/running.cfg` para guardar el nuevo connection string tras key exchange. Sin este archivo, no puede persistir la device-specific key.
+- **Fix**: `cp /tmp/system.cfg /tmp/running.cfg` antes de matar udapi-bridge → key exchange exitoso
+- **Regla**: NO eliminar `running.cfg` en antenas que necesitan key exchange fresco. Solo eliminarlo si ya tienen device-specific key funcional.
+
+**Resultado**: **35/35 recuperadas (100%)**. UISP pasó de 112 activas a 182 conectadas.
+
+**Scripts**: `fix-35-disconnected.sh`, `fix-remaining.sh`, `fix-restart-udapi.sh`, `fix3.sh`, `fix53.sh`, `fix-nicolas.sh`
+
+### 16. Bug UISP: connection string mostraba allowSelfSignedCertificate (2026-02-19)
+**Problema**: La página de settings de UISP (`/nms/settings/devices`) generaba el connection string con `+allowSelfSignedCertificate` en vez de `+allowUntrustedCertificate`. Esto causaba que antenas configuradas con la key copiada del UI tuvieran problemas de encriptación.
+
+**Causa raíz**: Bug en UISP v3.0.151 — el código fuente hardcodea `allowSelfSignedCertificate` en múltiples archivos (frontend y backend).
+
+**Archivos corregidos** (dentro del contenedor `unms-api`):
+| Archivo | Ocurrencias | Función |
+|---------|:-:|---------|
+| `/home/app/unms/api.js` | 3 | Backend API — genera connection string |
+| `/home/app/unms/device-ws.js` | 2 | WebSocket handler |
+| `/home/app/unms/cli/unms-key.js` | 1 | CLI key generator |
+| `/home/app/unms/public/assets/index-BF6PYhCd.js` | 1 | Frontend JS |
+
+**Fix aplicado**: `sed -i 's/allowSelfSignedCertificate/allowUntrustedCertificate/g'` en los 4 archivos + `docker restart unms-api`.
+
+**Advertencia**: Estos cambios están DENTRO del contenedor Docker. Si UISP se actualiza o el contenedor se recrea desde la imagen base, los cambios se pierden. Verificar tras cualquier actualización de UISP.
+
+### 17. 27 antenas Ubiquiti sin entrada UISP (2026-02-19)
+**Problema**: 27 antenas Ubiquiti con PPPoE activo pero sin ningún dispositivo correspondiente en UISP.
+**Intento de fix**: Script `fix-27-missing.sh` para configurar connection string via SSH.
+**Resultado**: Solo 4 de 27 accesibles (1 configurada, 3 ya tenían config correcta). 23 fallaron por credenciales desconocidas o inaccesibilidad SSH.
+**Pendiente**: Requieren acceso web o físico para configurar UISP connection string.
+
 ## Archivos Importantes en este Repositorio
 
 | Archivo | Descripción |
@@ -328,11 +382,19 @@ killall -9 udapi-bridge
 | `fix-flag-all.sh` | Script para cambiar allowSelfSignedCertificate→allowUntrustedCertificate |
 | `fix-udapi-19.sh` | Script para fix masivo de udapi-bridge (rm running.cfg + kill) |
 | `cross_reference.py` | Script para cruce PPPoE ↔ UISP por MAC e IP |
+| `cross_ref_ppp_uisp.py` | Cross-reference PPPoE activo vs UISP stations (2026-02-19) |
+| `fix-35-disconnected.sh` | Fix 35 antenas desconectadas: rm running.cfg + kill udapi-bridge |
+| `fix-remaining.sh` | Batch 2 de fix para 19 antenas restantes |
+| `fix-restart-udapi.sh` | Restart udapi-bridge en 31 antenas post-ZeroTier route |
+| `fix3.sh` | Fix últimas 3 antenas (Magda Mora, Ana Esther, Jose Nicolas) |
+| `fix53.sh` | Fix 10.10.1.53 + 10.10.1.219 (reset master key) |
+| `fix-nicolas.sh` | Nuclear fix 10.10.1.53: delete BD + clean system.cfg + restart |
+| `fix-27-missing.sh` | Configurar UISP connection string en 27 antenas sin entrada UISP |
 
 ## Datos Técnicos airOS
 
 - **Config persistente**: `/tmp/system.cfg` (se guarda a flash con `cfgmtd -w -p /etc/`)
-- **Config runtime**: `/tmp/running.cfg` (si existe, `udapi-bridge` la usa en lugar de system.cfg)
+- **Config runtime**: `/tmp/running.cfg` (si existe, `udapi-bridge` la usa en lugar de system.cfg). **IMPORTANTE**: udapi-bridge NECESITA running.cfg para guardar device-specific keys tras key exchange. NO eliminarlo si la antena necesita key exchange fresco; en ese caso usar `cp /tmp/system.cfg /tmp/running.cfg`.
 - **Proceso UISP**: `udapi-bridge` (hijo con prefijo `{exe}`) - es el que conecta via WebSocket
 - **Proceso informd**: `infctld` - controlador inform (menos relevante para conexión UISP)
 - **Logs UISP**: `/var/log/unms.log`
@@ -449,7 +511,7 @@ Flujo mejorado de vinculacion Telegram → CRM:
 | `src/bot/handlers/registration.py` | ConversationHandler 3 estados: nombre→zona→confirmar |
 | `src/bot/keyboards.py` | `zone_selection()` teclado inline 12 zonas |
 
-### Estado del bot (2026-02-18)
+### Estado del bot (2026-02-19)
 - ✅ Desplegado en VPS (217.216.85.65) con Docker
 - ✅ Bot renombrado a "AURA" en BotFather (@auralinkmonitor_bot)
 - ✅ Botones inline funcionando
@@ -765,6 +827,8 @@ Ver detalle en Problema Resuelto #10.
 - Corregidas ~20 secuencias PostgreSQL del CRM
 - Autorización de 2 dispositivos nuevos (.116, .204)
 - Firmware upgrade masivo a XW.v6.3.24 (15+ antenas)
+- Fix PCC routing UISP: ZeroTier route + mangle bypass → 35 antenas recuperadas (2026-02-19)
+- Bug connection string UISP corregido en 4 archivos backend/frontend (2026-02-19)
 
 ## Pendientes
 
@@ -778,10 +842,14 @@ Ver detalle en Problema Resuelto #10.
 - [ ] Probar diferenciacion admin/cliente en system prompt
 - [x] Flujo /vincular mejorado con zonas, fuzzy match y ID de servicio — implementado
 - [x] Renombrar bot en BotFather a "AURA" — hecho
-- [x] Fix masivo UISP — 60→179 activos (97%), device-specific key desync fue causa raíz principal
+- [x] Fix masivo UISP — 60→182 conectados, device-specific key desync + PCC routing fueron causas raíz
 - [x] 71 fantasmas eliminados — 32 via API + 39 via PostgreSQL
 - [x] Fix keys sesión 02-18 — +24 dispositivos recuperados (155→179), reset master key masivo
-- [ ] 5 dispositivos desconectados — 1 credenciales custom (10.1.1.211), 4 pendientes revisar
+- [x] Fix PCC→UISP sesión 02-19 — +35 antenas recuperadas (112→182), ZeroTier route permanente
+- [x] Connection string UISP corregido — allowSelfSignedCertificate→allowUntrustedCertificate en 4 archivos
+- [ ] 5 dispositivos desconectados autorizados — pendientes de revisar
+- [ ] 32 dispositivos desconectados no autorizados — posibles phantoms o antenas sin configurar
+- [ ] ~23 antenas Ubiquiti con PPPoE pero sin UISP — credenciales SSH desconocidas, requieren acceso físico
 - [ ] 38 servicios CRM sin enlace a endpoint NMS — enlazar o revisar
 - [x] Sistema de cobranza automatizada — implementado y desplegado
 - [x] Deploy cobranza en VPS — corriendo con BILLING_START_MONTH=2026-04
@@ -804,11 +872,14 @@ Ver detalle en Problema Resuelto #10.
 - [x] nicolasahumada perfil corregido — $800→$300 Basico 3M/8M
 - [x] Firmware upgrades morosos — 3/14 actualizadas a v6.3.24, 2 son AC (no aplica XW), 9 sin acceso SSH
 - [x] Decryption errors reducidos 97% — 22 phantoms eliminados, 3 keys reseteadas, 2 DB keys limpiadas
-- [ ] ~53 antenas con credenciales SSH desconocidas — requieren acceso web/físico
 - [ ] 172.168.x.x — removido de local-networks, pendiente migrar a RFC1918 correcto
 - [x] Ping Watchdog verificado — 175/176 antenas ya lo tenían activo (target=gateway, period=300s, retry=3)
 - [x] MikroTik en UISP — agregado como Third Party (blackBox) en Matriz Tomatlan
 - [x] Mangle Infra→UISP — fuerza tráfico infra al VPS por WAN8 (evita CGNAT Starlink)
+- [x] ZeroTier route para UISP VPS — 217.216.85.65/32 via 10.147.17.92 + mangle Skip-PCC-for-UISP-VPS
+- [x] 35 antenas desconectadas UISP — recuperadas 100% via ZeroTier route + udapi-bridge restart
+- [x] Bug connection string UISP — corregido allowSelfSignedCertificate en 4 archivos (api.js, device-ws.js, unms-key.js, frontend)
+- [ ] Verificar connection string flag tras actualizaciones UISP — cambios dentro del contenedor se pierden
 
 ## Planes de servicio (UISP CRM)
 
@@ -833,19 +904,20 @@ Solo los 4 planes principales reciben avisos automaticos de cobranza y suspensio
 
 Estos datos se envian automaticamente en los recordatorios (dia 3), advertencia (dia 7) y aviso de suspension (dia 8).
 
-## Estado Actual (2026-02-18 noche)
-- **184 dispositivos** en UISP: **179 activos** (97%), 5 desconectados, 0 fantasmas (33 adicionales eliminados hoy)
+## Estado Actual (2026-02-19)
+- **219 dispositivos** en UISP: **182 conectados** (180 autorizados + 2 sin autorizar), 5 desconectados autorizados, 32 desconectados no autorizados
 - **261 CRM clientes / 262 servicios** — 224 enlazados 1:1 a NMS endpoints (38 sin enlace)
-- **254 PPPoE secrets** (~198 sesiones activas), clienteprueba deshabilitado, pool 506 IPs
-- **MikroTik**: PCC en 7 WANs activas (WAN10 deshabilitado), fasttrack OFF, QoS CAKE funcional en todas las WANs, WAN1/WAN2 netwatch corregidos
+- **254 PPPoE secrets** (~196 sesiones activas), clienteprueba deshabilitado, pool 506 IPs
+- **MikroTik**: PCC en 7 WANs activas (WAN10 deshabilitado), fasttrack OFF, QoS CAKE funcional, ruta ZeroTier para UISP VPS (bypass PCC)
+- **UISP VPS routing**: Todo tráfico de antenas al VPS va por ZeroTier (mangle Skip-PCC + ruta estática 217.216.85.65/32 via 10.147.17.92)
+- **Connection string UISP**: Flag `allowUntrustedCertificate` corregido en 4 archivos del contenedor unms-api
 - **Aura Bot "AURA"** en produccion en VPS con Docker — 6 bugs corregidos + onboarding desplegado
 - **Monitor de red** corriendo: 25 zonas, 174 endpoints, 17 infra tracked, polling cada 2 min
 - **Sistema de cobranza** activo: BILLING_START_MONTH=2026-04, listo para abril
 - **Sistema de onboarding**: /sinvincular, /progreso, /mensaje — listo para campana de vinculacion
 - **Portal morosos** operativo: HTTP + HTTPS redirect, sync-morosos cada 1 min, Telegram permitido
 - **Backups automatizados**: MikroTik + Aura DB a VPS diario (cron 4:30/4:35 AM), retencion 14 dias
-- **5 desconectados restantes**: 10.1.1.211 (credenciales custom), 10.10.1.150, .171, .180, .227
-- **~53 antenas con credenciales SSH desconocidas** — requieren acceso web/fisico
 - **Enlace PtP optimizado**: AP Tomatlan-Colmena ↔ ST Colmenares — PtP+80MHz, capacity 248 Mbps (+88%)
 - **172.168.x.x restaurado**: re-agregado a local-networks (fix temporal hasta migrar a RFC1918)
+- **~23 antenas sin UISP**: tienen PPPoE pero credenciales SSH desconocidas, requieren acceso fisico
 - **Prioridad**: vincular clientes a Telegram antes de abril (0 vinculados actualmente)

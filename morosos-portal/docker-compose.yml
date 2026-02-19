@@ -5,6 +5,9 @@ services:
     restart: unless-stopped
     ports:
       - "8088:80"
+      - "8443:443"
     volumes:
       - ./index.html:/usr/share/nginx/html/index.html:ro
       - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./selfsigned.crt:/etc/nginx/ssl/selfsigned.crt:ro
+      - ./selfsigned.key:/etc/nginx/ssl/selfsigned.key:ro

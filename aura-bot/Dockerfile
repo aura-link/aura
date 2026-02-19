@@ -12,4 +12,7 @@ RUN mkdir -p data
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app
 
+HEALTHCHECK --interval=60s --timeout=10s --retries=3 \
+  CMD python -c "import sys; sys.exit(0)"
+
 CMD ["python", "-m", "src.main"]

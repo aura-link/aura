@@ -1,6 +1,7 @@
 """Configuracion central de Aura Bot. Carga variables de .env y valida."""
 
 import os
+import re
 import sys
 from pathlib import Path
 from dotenv import load_dotenv
@@ -64,3 +65,8 @@ BILLING_DAY_SUSPEND: int = int(os.getenv("BILLING_DAY_SUSPEND", "8"))
 RECONNECTION_FEE: float = float(os.getenv("RECONNECTION_FEE", "80"))
 RECEIPT_STORAGE_PATH: str = os.getenv("RECEIPT_STORAGE_PATH", "data/receipts")
 BILLING_START_MONTH: str = os.getenv("BILLING_START_MONTH", "2026-04")  # YYYY-MM, no billing before this
+
+# Validate BILLING_START_MONTH format
+if not re.match(r"^\d{4}-(0[1-9]|1[0-2])$", BILLING_START_MONTH):
+    print(f"ERROR: BILLING_START_MONTH debe ser formato YYYY-MM, recibido: {BILLING_START_MONTH}")
+    sys.exit(1)
