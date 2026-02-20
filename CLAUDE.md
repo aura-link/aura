@@ -105,8 +105,8 @@ wss://server.auralink.link:443+sBRaeWB1kiH4cxBIWmBTEyuxIIeULvidfT3s7UXpR2ZbapIV+
 - Se cambió de ECDSA a RSA para compatibilidad con firmware viejo
 
 ### CRM
-- 261 clientes / 262 servicios (actualizado 2026-02-17)
-- 224 sitios NMS endpoint (todos enlazados 1:1 a CRM, 38 servicios CRM sin enlace NMS)
+- 240 clientes / 241 servicios (actualizado 2026-02-20, user eliminó 21 no-clientes)
+- 222 sitios NMS endpoint (todos enlazados 1:1 a CRM, 19 servicios CRM sin enlace NMS)
 - 28 sitios NMS infraestructura
 - **CRM API Key** (X-Auth-App-Key): usa el token del .env, NO el de postgres
 - **Secuencias PostgreSQL**: se desincronizaron tras migración. Si da error 500 al crear suscriptor, resetear con: `SELECT setval('ucrm.SEQUENCE_NAME', (SELECT MAX(col) FROM ucrm.TABLE));`
@@ -358,6 +358,28 @@ killall -9 udapi-bridge
 **Resultado**: Solo 4 de 27 accesibles (1 configurada, 3 ya tenían config correcta). 23 fallaron por credenciales desconocidas o inaccesibilidad SSH.
 **Pendiente**: Requieren acceso web o físico para configurar UISP connection string.
 
+### 18. Limpieza CRM + phantoms + decryption fix (2026-02-20)
+
+**CRM cleanup**: User eliminó manualmente 21 servicios de no-clientes de Auralink (262→241 servicios). Quedan 19 servicios CRM sin enlace a endpoint NMS — todos tienen PPPoE secret pero sus antenas no están registradas en UISP.
+
+**42 phantoms eliminados**: Segunda ronda de limpieza de dispositivos fantasma en BD UISP. Query: `DELETE FROM unms.device WHERE NOT connected AND NOT authorized AND (name IS NULL OR name='') AND site_id IS NULL`. 1 conservado con sitio "Recursos" (MAC e4:38:83:b8:64:e5, posible infra real).
+
+**7 antenas con decryption errors fijadas**: Script `fix-decryption-7.sh` reseteó master key en 7 antenas que tenían device-specific keys huérfanas (terminan en AAAAA) causando ~165 errores/hora.
+
+| Antena | Cliente | Resultado |
+|--------|---------|-----------|
+| 10.10.1.55 | hugomanzot | RESET OK — apareció en UISP |
+| 10.10.1.54 | veronicatenoriot | RESET OK — apareció en UISP |
+| 10.10.1.222 | dianacornejoc | RESET OK — apareció en UISP |
+| 10.10.1.161 | veronicachavarinc | RESET OK |
+| 10.10.1.86 | landinc | RESET OK |
+| 10.10.1.75 | danielayonc | RESET OK (desconectada) |
+| 10.10.1.184 | diftomatlan | FALLÓ (inalcanzable) |
+
+**Resultado**: Decryption errors: ~165/hora → ~34 en 5 min (~90% reducción). 3 dispositivos nuevos aparecieron en UISP. 6 MACs restantes no fixeables remotamente (1 inalcanzable, 1 rogue externo, 2 desconocidas, 1 moroso sin SSH, 1 desconectada).
+
+**4 antenas de 19 sin UISP intentadas**: Script `fix-19-uisp.sh` — solo 4 online de 19. Resultado: 1 ya configurada (.84), 3 morosos inalcanzables (firewall + credenciales desconocidas).
+
 ## Archivos Importantes en este Repositorio
 
 | Archivo | Descripción |
@@ -390,6 +412,8 @@ killall -9 udapi-bridge
 | `fix53.sh` | Fix 10.10.1.53 + 10.10.1.219 (reset master key) |
 | `fix-nicolas.sh` | Nuclear fix 10.10.1.53: delete BD + clean system.cfg + restart |
 | `fix-27-missing.sh` | Configurar UISP connection string en 27 antenas sin entrada UISP |
+| `fix-decryption-7.sh` | Reset master key en 7 antenas con device-specific keys huérfanas |
+| `fix-19-uisp.sh` | Configurar UISP en 4 antenas online de 19 servicios CRM sin enlace NMS |
 
 ## Datos Técnicos airOS
 
@@ -511,7 +535,7 @@ Flujo mejorado de vinculacion Telegram → CRM:
 | `src/bot/handlers/registration.py` | ConversationHandler 3 estados: nombre→zona→confirmar |
 | `src/bot/keyboards.py` | `zone_selection()` teclado inline 12 zonas |
 
-### Estado del bot (2026-02-19)
+### Estado del bot (2026-02-20)
 - ✅ Desplegado en VPS (217.216.85.65) con Docker
 - ✅ Bot renombrado a "AURA" en BotFather (@auralinkmonitor_bot)
 - ✅ Botones inline funcionando
@@ -800,19 +824,19 @@ Perfiles eliminados (0 usuarios): Tecnologico, teque, simétrico
 - [ ] Migrar red 172.168.x.x a rango RFC1918 correcto (172.16-31.x.x)
 - [x] 17 antenas con RPC timeout — 10 resueltas con fix masivo + firmware upgrade, 7 aún desconectadas
 
-## Auditoría UISP (2026-02-15 → actualizada 2026-02-17)
+## Auditoría UISP (2026-02-15 → actualizada 2026-02-20)
 
 ### Análisis cruzado PPPoE ↔ CRM ↔ NMS
-- **224/262 CRM servicios enlazados a endpoints NMS** — todos los 224 sitios NMS endpoint enlazados 1:1 (0 duplicados, 0 huérfanos)
-- **38 servicios CRM sin enlace NMS** — clientes sin antena registrada en UISP o con antena aún desconectada
+- **222/241 CRM servicios enlazados a endpoints NMS** — todos los 222 sitios NMS endpoint enlazados 1:1 (0 duplicados, 0 huérfanos)
+- **19 servicios CRM sin enlace NMS** — todos tienen PPPoE secret pero antena no está en UISP (15 offline, 3 morosos sin acceso SSH, 1 ya enlazada a otro servicio)
 - **2 "Luz Mariscal"** en CRM: no son duplicados, son direcciones distintas (Nahuapa vs otro)
 - Se eliminaron 4 endpoints huérfanos en auditoría previa: Olivia Cumbre, Alma Gloria, Enrique Pulido, Tule Mabel
 - **Duplicado CRM #254 (Kareli Meza Coco)** eliminado ($0 balance, sin servicio)
 - **Naming consistente**: NMS usa "Zona, Nombre" / CRM usa "Nombre Zona" — todos hacen match
 
 ### PPPoE
-- 254 secrets total (clienteprueba deshabilitado, actualizado 2026-02-17)
-- ~196 sesiones activas
+- 254 secrets total (clienteprueba deshabilitado, actualizado 2026-02-20)
+- ~198 sesiones activas
 - 0 sesiones "clienteprueba" — secret deshabilitado, todos migrados a individuales
 - 15 clientes en perfil "Morosos" (confirmados legítimos)
 
@@ -821,7 +845,7 @@ Todos los 6 clientes que usaban `clienteprueba` ya tienen secrets individuales. 
 Ver detalle en Problema Resuelto #10.
 
 ### Limpieza realizada (acumulado)
-- Eliminados **104 dispositivos fantasma** total (32 via API + 39 via PostgreSQL + 33 via PostgreSQL 2026-02-18)
+- Eliminados **146 dispositivos fantasma** total (32 via API + 39 via PostgreSQL + 33 via PostgreSQL 2026-02-18 + 42 via PostgreSQL 2026-02-20)
 - Eliminados 4 endpoints NMS huérfanos
 - Eliminado 1 duplicado CRM
 - Corregidas ~20 secuencias PostgreSQL del CRM
@@ -829,6 +853,8 @@ Ver detalle en Problema Resuelto #10.
 - Firmware upgrade masivo a XW.v6.3.24 (15+ antenas)
 - Fix PCC routing UISP: ZeroTier route + mangle bypass → 35 antenas recuperadas (2026-02-19)
 - Bug connection string UISP corregido en 4 archivos backend/frontend (2026-02-19)
+- 21 no-clientes eliminados del CRM por user (262→241 servicios) (2026-02-20)
+- 7 antenas decryption fix: 6 reseteadas a master key, 3 nuevas aparecieron en UISP (2026-02-20)
 
 ## Pendientes
 
@@ -848,9 +874,9 @@ Ver detalle en Problema Resuelto #10.
 - [x] Fix PCC→UISP sesión 02-19 — +35 antenas recuperadas (112→182), ZeroTier route permanente
 - [x] Connection string UISP corregido — allowSelfSignedCertificate→allowUntrustedCertificate en 4 archivos
 - [ ] 5 dispositivos desconectados autorizados — pendientes de revisar
-- [ ] 32 dispositivos desconectados no autorizados — posibles phantoms o antenas sin configurar
+- [ ] ~20 dispositivos desconectados no autorizados — posibles phantoms o antenas sin configurar (42 phantoms eliminados 2026-02-20)
 - [ ] ~23 antenas Ubiquiti con PPPoE pero sin UISP — credenciales SSH desconocidas, requieren acceso físico
-- [ ] 38 servicios CRM sin enlace a endpoint NMS — enlazar o revisar
+- [ ] 19 servicios CRM sin enlace a endpoint NMS — antenas no están en UISP (15 offline, 3 morosos sin acceso, 1 ya enlazada)
 - [x] Sistema de cobranza automatizada — implementado y desplegado
 - [x] Deploy cobranza en VPS — corriendo con BILLING_START_MONTH=2026-04
 - [x] Docker volume para data/ — ya mapeado en docker-compose.yml
@@ -880,6 +906,11 @@ Ver detalle en Problema Resuelto #10.
 - [x] 35 antenas desconectadas UISP — recuperadas 100% via ZeroTier route + udapi-bridge restart
 - [x] Bug connection string UISP — corregido allowSelfSignedCertificate en 4 archivos (api.js, device-ws.js, unms-key.js, frontend)
 - [ ] Verificar connection string flag tras actualizaciones UISP — cambios dentro del contenedor se pierden
+- [x] CRM limpieza — user eliminó 21 no-clientes (262→241 servicios)
+- [x] 42 phantoms UISP eliminados — segunda ronda limpieza BD (total acumulado: 146)
+- [x] 7 antenas decryption fix — 6/7 reseteadas a master key, 3 nuevas en UISP (+hugomanzot, veronicatenoriot, dianacornejoc)
+- [ ] 6 MACs decryption restantes — diftomatlan (inalcanzable), rogue Pilitas (externo), 2 desconocidas, Maria Cristina (moroso), danielayonc (desconectada)
+- [ ] Dispositivo "Recursos" en UISP — MAC e4:38:83:b8:64:e5, verificar si es infra real o phantom
 
 ## Planes de servicio (UISP CRM)
 
@@ -904,10 +935,10 @@ Solo los 4 planes principales reciben avisos automaticos de cobranza y suspensio
 
 Estos datos se envian automaticamente en los recordatorios (dia 3), advertencia (dia 7) y aviso de suspension (dia 8).
 
-## Estado Actual (2026-02-19)
-- **219 dispositivos** en UISP: **182 conectados** (180 autorizados + 2 sin autorizar), 5 desconectados autorizados, 32 desconectados no autorizados
-- **261 CRM clientes / 262 servicios** — 224 enlazados 1:1 a NMS endpoints (38 sin enlace)
-- **254 PPPoE secrets** (~196 sesiones activas), clienteprueba deshabilitado, pool 506 IPs
+## Estado Actual (2026-02-20)
+- **~190 dispositivos** en UISP: **184 conectados autorizados**, 2 conectados sin autorizar, 6 desconectados autorizados, ~20 desconectados no autorizados (42 phantoms eliminados)
+- **240 CRM clientes / 241 servicios** — 222 enlazados 1:1 a NMS endpoints (19 sin enlace)
+- **254 PPPoE secrets** (~198 sesiones activas), clienteprueba deshabilitado, pool 506 IPs
 - **MikroTik**: PCC en 7 WANs activas (WAN10 deshabilitado), fasttrack OFF, QoS CAKE funcional, ruta ZeroTier para UISP VPS (bypass PCC)
 - **UISP VPS routing**: Todo tráfico de antenas al VPS va por ZeroTier (mangle Skip-PCC + ruta estática 217.216.85.65/32 via 10.147.17.92)
 - **Connection string UISP**: Flag `allowUntrustedCertificate` corregido en 4 archivos del contenedor unms-api
@@ -920,4 +951,5 @@ Estos datos se envian automaticamente en los recordatorios (dia 3), advertencia 
 - **Enlace PtP optimizado**: AP Tomatlan-Colmena ↔ ST Colmenares — PtP+80MHz, capacity 248 Mbps (+88%)
 - **172.168.x.x restaurado**: re-agregado a local-networks (fix temporal hasta migrar a RFC1918)
 - **~23 antenas sin UISP**: tienen PPPoE pero credenciales SSH desconocidas, requieren acceso fisico
+- **Decryption errors**: reducidos ~90% (165/hr → ~34/5min), 6 MACs restantes no fixeables remotamente
 - **Prioridad**: vincular clientes a Telegram antes de abril (0 vinculados actualmente)
