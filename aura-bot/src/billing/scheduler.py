@@ -8,6 +8,7 @@ import asyncio
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from src import config
+from src.bot.handlers.plan_change import apply_approved_changes
 from src.utils.logger import log
 
 TZ = ZoneInfo("America/Mexico_City")
@@ -28,6 +29,7 @@ class BillingScheduler:
         self.mk = mk
         self.db = db
         self.notifier = notifier
+        self.bot = None  # set after init to notify clients
         self._running = False
         self._task: asyncio.Task | None = None
 
@@ -84,6 +86,15 @@ class BillingScheduler:
         # Don't bill before the start month
         if billing_month < config.BILLING_START_MONTH:
             return
+
+        # Apply approved plan changes on day 1
+        if today == 1 and self.mk:
+            try:
+                applied = await apply_approved_changes(self.mk, self.db, bot=self.bot)
+                if applied:
+                    log.info("Applied %d plan changes for %s", applied, billing_month)
+            except Exception as e:
+                log.error("Plan change application error: %s", e)
 
         # Check each action in order: only run if today >= action day
         actions = [

@@ -181,6 +181,20 @@ class Database:
                 contacted_via TEXT,
                 notes TEXT
             );
+
+            CREATE TABLE IF NOT EXISTS pending_plan_changes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                crm_client_id TEXT NOT NULL,
+                client_name TEXT,
+                telegram_user_id INTEGER NOT NULL,
+                current_plan TEXT NOT NULL,
+                requested_plan TEXT NOT NULL,
+                status TEXT DEFAULT 'pending',
+                requested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                approved_at TIMESTAMP,
+                effective_date TEXT,
+                applied_at TIMESTAMP
+            );
         """)
         await self.db.commit()
 
@@ -757,3 +771,56 @@ class Database:
     async def onboarding_sync_committed(self):
         """Commit pending onboarding changes."""
         await self.db.commit()
+
+    # -- pending_plan_changes --
+
+    async def create_plan_change_request(
+        self, crm_client_id: str, client_name: str, telegram_user_id: int,
+        current_plan: str, requested_plan: str, effective_date: str,
+    ) -> int:
+        cursor = await self.db.execute(
+            """INSERT INTO pending_plan_changes
+               (crm_client_id, client_name, telegram_user_id, current_plan,
+                requested_plan, effective_date)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (crm_client_id, client_name, telegram_user_id, current_plan,
+             requested_plan, effective_date),
+        )
+        await self.db.commit()
+        return cursor.lastrowid  # type: ignore
+
+    async def get_plan_change(self, change_id: int) -> dict | None:
+        cursor = await self.db.execute(
+            "SELECT * FROM pending_plan_changes WHERE id = ?", (change_id,)
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+
+    async def update_plan_change(self, change_id: int, **kwargs):
+        sets = ", ".join(f"{k} = ?" for k in kwargs)
+        vals = list(kwargs.values()) + [change_id]
+        await self.db.execute(
+            f"UPDATE pending_plan_changes SET {sets} WHERE id = ?", vals
+        )
+        await self.db.commit()
+
+    async def get_approved_plan_changes(self, effective_date: str) -> list[dict]:
+        """Get all approved (not yet applied) plan changes for a given effective date."""
+        cursor = await self.db.execute(
+            """SELECT * FROM pending_plan_changes
+               WHERE status = 'approved' AND effective_date = ? AND applied_at IS NULL""",
+            (effective_date,),
+        )
+        return [dict(r) for r in await cursor.fetchall()]
+
+    async def has_pending_plan_change(self, telegram_user_id: int) -> dict | None:
+        """Check if user has a pending or approved (unapplied) plan change."""
+        cursor = await self.db.execute(
+            """SELECT * FROM pending_plan_changes
+               WHERE telegram_user_id = ? AND status IN ('pending', 'approved')
+               AND applied_at IS NULL
+               ORDER BY requested_at DESC LIMIT 1""",
+            (telegram_user_id,),
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None

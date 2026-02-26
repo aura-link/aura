@@ -9,7 +9,8 @@ def main_menu_customer() -> InlineKeyboardMarkup:
          InlineKeyboardButton("📡 Mi Servicio", callback_data="cmd_miservicio")],
         [InlineKeyboardButton("📶 Mi Conexion", callback_data="cmd_miconexion"),
          InlineKeyboardButton("🔧 Reportar", callback_data="cmd_reportar")],
-        [InlineKeyboardButton("💳 Reportar Pago", callback_data="cmd_reportar_pago")],
+        [InlineKeyboardButton("💳 Reportar Pago", callback_data="cmd_reportar_pago"),
+         InlineKeyboardButton("📋 Cambiar Plan", callback_data="cmd_cambiarplan")],
         [InlineKeyboardButton("🆘 Soporte", callback_data="cmd_soporte")],
     ])
 
@@ -60,6 +61,10 @@ def admin_panel() -> InlineKeyboardMarkup:
         [InlineKeyboardButton("── Onboarding ──", callback_data="noop")],
         [InlineKeyboardButton("📲 Sin Vincular", callback_data="cmd_sinvincular"),
          InlineKeyboardButton("📊 Progreso", callback_data="cmd_progreso")],
+        # -- Avisos --
+        [InlineKeyboardButton("── Avisos ──", callback_data="noop")],
+        [InlineKeyboardButton("📢 Avisos Portal", callback_data="cmd_aviso"),
+         InlineKeyboardButton("📋 Registrados", callback_data="cmd_registrados")],
     ])
 
 

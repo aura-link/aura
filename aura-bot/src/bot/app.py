@@ -28,6 +28,8 @@ from src.billing.receipt_storage import ReceiptStorage
 from src.billing.scheduler import BillingScheduler
 from src.bot.handlers import billing_admin, receipts
 from src.bot.handlers import onboarding_admin
+from src.bot.handlers import avisos_admin
+from src.bot.handlers import plan_change
 from src.utils.logger import log
 
 
@@ -92,6 +94,7 @@ async def post_init(application: Application):
     application.bot_data["payment_processor"] = payment_processor
     application.bot_data["billing_scheduler"] = billing_scheduler
 
+    billing_scheduler.bot = application.bot
     if config.BILLING_ENABLED:
         await billing_scheduler.start()
 
@@ -107,6 +110,12 @@ async def post_init(application: Application):
 
     application.bot_data["_cleanup_task"] = asyncio.create_task(_cleanup_loop())
 
+    # Aviso scheduler: re-publishes registration aviso every 3 days, transitions modes
+    application.bot_data["_bot"] = application.bot  # reference for scheduler notifications
+    application.bot_data["_aviso_task"] = asyncio.create_task(
+        avisos_admin.aviso_scheduler_loop(application.bot_data)
+    )
+
     log.info("Aura Bot inicializado correctamente")
 
 
@@ -117,6 +126,14 @@ async def post_shutdown(application: Application):
         cleanup_task.cancel()
         try:
             await cleanup_task
+        except asyncio.CancelledError:
+            pass
+
+    aviso_task = application.bot_data.get("_aviso_task")
+    if aviso_task:
+        aviso_task.cancel()
+        try:
+            await aviso_task
         except asyncio.CancelledError:
             pass
 
@@ -206,6 +223,13 @@ def create_application() -> Application:
     app.add_handler(CommandHandler("progreso", onboarding_admin.progreso_command))
     app.add_handler(CommandHandler("mensaje", onboarding_admin.mensaje_command))
 
+    # Avisos portal admin commands
+    app.add_handler(CommandHandler("aviso", avisos_admin.aviso_command))
+    app.add_handler(CommandHandler("registrados", avisos_admin.registrados_command))
+
+    # Client plan change
+    app.add_handler(CommandHandler("cambiarplan", plan_change.cambiarplan_command))
+
     # Callback queries from inline keyboards
     app.add_handler(CallbackQueryHandler(_handle_callback))
 
@@ -216,6 +240,45 @@ def create_application() -> Application:
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, conversation.handle_message))
 
     return app
+
+
+async def _handle_reg_soporte(update, context):
+    """Handle 'Contactar Soporte' button from registration flow."""
+    query = update.callback_query
+    user = update.effective_user
+    await query.answer()
+
+    db = context.bot_data["db"]
+    ticket_id = await db.create_escalation(
+        telegram_user_id=user.id,
+        telegram_username=user.username,
+        crm_client_id=None,
+        issue="No pudo vincular cuenta via /vincular — solicita ayuda manual",
+    )
+
+    await query.message.reply_text(
+        f"Tu solicitud de soporte fue registrada (ticket #{ticket_id}).\n\n"
+        "Un administrador te contactará pronto para ayudarte a vincular tu cuenta."
+    )
+
+    # Notify admins
+    name = user.full_name or user.username or str(user.id)
+    for admin_id in config.TELEGRAM_ADMIN_IDS:
+        try:
+            await context.bot.send_message(
+                chat_id=admin_id,
+                text=(
+                    f"🆘 *Solicitud de soporte (registro)*\n\n"
+                    f"Usuario: {name}\n"
+                    f"Telegram ID: `{user.id}`\n"
+                    f"Username: @{user.username or 'sin username'}\n"
+                    f"Ticket: #{ticket_id}\n\n"
+                    "No pudo vincular su cuenta automaticamente."
+                ),
+                parse_mode="Markdown",
+            )
+        except Exception as e:
+            log.warning("Failed to notify admin %d about reg support: %s", admin_id, e)
 
 
 async def _handle_callback(update, context):
@@ -248,6 +311,9 @@ async def _handle_callback(update, context):
         "cmd_morosos": billing_admin.morosos_command,
         "cmd_sinvincular": onboarding_admin.sinvincular_command,
         "cmd_progreso": onboarding_admin.progreso_command,
+        "cmd_aviso": avisos_admin.aviso_command,
+        "cmd_registrados": avisos_admin.registrados_command,
+        "cmd_cambiarplan": plan_change.cambiarplan_command,
     }
 
     # No-op for section dividers
@@ -322,6 +388,21 @@ async def _handle_callback(update, context):
     # Maintenance cancel callbacks
     if data and data.startswith("cancel_maint_"):
         await monitoring_admin.handle_cancel_maintenance(update, context)
+        return
+
+    # Avisos portal callbacks (publish/cancel)
+    if data and data.startswith("aviso_"):
+        await avisos_admin.handle_aviso_callback(update, context)
+        return
+
+    # Plan change callbacks (client select + admin approve/reject)
+    if data and data.startswith("planchange_"):
+        await plan_change.handle_planchange_callback(update, context)
+        return
+
+    # Registration support escalation
+    if data == "reg_soporte":
+        await _handle_reg_soporte(update, context)
         return
 
     # Onboarding callbacks (onb_zone_, onb_contacted_, onb_skip_, onb_allzone_, onb_whatsapp, onb_showcontacted_)

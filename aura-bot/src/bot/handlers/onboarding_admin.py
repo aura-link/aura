@@ -178,6 +178,11 @@ async def progreso_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     db = context.bot_data["db"]
+    crm = context.bot_data["uisp_crm"]
+
+    # Sync before showing (so linked count is up to date)
+    await _sync_onboarding(db, crm)
+
     zones = await db.get_onboarding_by_zone()
     stats = await db.get_onboarding_stats()
 
@@ -206,6 +211,15 @@ async def progreso_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     pct_total = (stats["linked"] / total * 100) if total > 0 else 0
     bar_total = "█" * round(pct_total / 10) + "░" * (10 - round(pct_total / 10))
     text += f"*TOTAL*: {bar_total} *{pct_total:.0f}%* ({stats['linked']}/{total})\n"
+
+    # Show list of registered clients
+    all_links = await db.get_all_customer_links()
+    if all_links:
+        text += f"\n*Registrados ({len(all_links)}):*\n"
+        for link in all_links:
+            name = link.get("crm_client_name", "?")
+            date = (link.get("linked_at") or "")[:10]
+            text += f"  - {name} ({date})\n"
 
     buttons = [[InlineKeyboardButton("Actualizar", callback_data="cmd_progreso")],
                [InlineKeyboardButton("Ver pendientes", callback_data="cmd_sinvincular")]]

@@ -66,6 +66,10 @@ RECONNECTION_FEE: float = float(os.getenv("RECONNECTION_FEE", "80"))
 RECEIPT_STORAGE_PATH: str = os.getenv("RECEIPT_STORAGE_PATH", "data/receipts")
 BILLING_START_MONTH: str = os.getenv("BILLING_START_MONTH", "2026-04")  # YYYY-MM, no billing before this
 
+# Portal de avisos
+AVISOS_PORTAL_URL: str = os.getenv("AVISOS_PORTAL_URL", "http://217.216.85.65:8090")
+AVISOS_ADMIN_TOKEN: str = os.getenv("AVISOS_ADMIN_TOKEN", "auralink-avisos-2026")
+
 # Validate BILLING_START_MONTH format
 if not re.match(r"^\d{4}-(0[1-9]|1[0-2])$", BILLING_START_MONTH):
     print(f"ERROR: BILLING_START_MONTH debe ser formato YYYY-MM, recibido: {BILLING_START_MONTH}")

@@ -70,6 +70,51 @@ def _generate_service_id(zone_abbr: str, client_id: str | int) -> str:
     return f"{zone_abbr}-{client_id}"
 
 
+async def _dismiss_from_avisos(mk, client_name: str):
+    """Remove registered client from avisos captive portal immediately.
+
+    Finds their PPPoE session IP, removes from avisos list, adds to avisos-visto.
+    """
+    # Find active PPPoE session
+    sessions = await mk.get_active_sessions()
+    client_ip = None
+    ppp_name = None
+    name_lower = client_name.lower().replace(" ", "")
+    for s in sessions:
+        sname = (s.get("name") or "").lower().replace(" ", "")
+        if sname and (name_lower in sname or sname in name_lower):
+            client_ip = s.get("address")
+            ppp_name = s.get("name")
+            break
+
+    if not client_ip:
+        return
+
+    # Remove from avisos + add to avisos-visto via MikroTik API
+    def _dismiss():
+        api = mk._connect()
+        try:
+            path = api.path("/ip/firewall/address-list")
+            entries = list(path)
+            # Remove from avisos
+            for e in entries:
+                e = dict(e)
+                if e.get("list") == "avisos" and e.get("address") == client_ip:
+                    path.remove(e[".id"])
+            # Check if already in avisos-visto
+            already = any(
+                dict(e).get("list") == "avisos-visto" and dict(e).get("address") == client_ip
+                for e in entries
+            )
+            if not already:
+                path.add(list="avisos-visto", address=client_ip, comment=ppp_name or "")
+        finally:
+            api.close()
+
+    await mk._run(_dismiss)
+    log.info("Auto-dismissed from avisos: %s (%s)", ppp_name, client_ip)
+
+
 async def start_registration(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Inicia el flujo de vinculacion."""
     user = update.effective_user
@@ -208,6 +253,10 @@ async def _search_and_show_matches(message, context, name_query: str, zone_name:
             "Verifica que tu nombre sea el mismo que usaste al contratar.\n"
             "Intenta de nuevo con /vincular o contacta a soporte.",
             parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔄 Intentar de nuevo", callback_data="cmd_vincular")],
+                [InlineKeyboardButton("🆘 Contactar Soporte", callback_data="reg_soporte")],
+            ]),
         )
         return
 
@@ -305,7 +354,11 @@ async def handle_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == "reg_retry":
         await query.message.reply_text(
-            "No hay problema. Intenta de nuevo con /vincular o contacta a soporte."
+            "No hay problema. Intenta de nuevo o contacta a soporte para ayuda personalizada.",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔄 Intentar de nuevo", callback_data="cmd_vincular")],
+                [InlineKeyboardButton("🆘 Contactar Soporte", callback_data="reg_soporte")],
+            ]),
         )
         return ConversationHandler.END
 
@@ -376,6 +429,14 @@ async def handle_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Update onboarding tracking
     await db.mark_onboarding_linked(client_id)
+
+    # Remove from captive portal avisos immediately
+    mk = context.bot_data.get("mikrotik")
+    if mk:
+        try:
+            await _dismiss_from_avisos(mk, client_name)
+        except Exception as e:
+            log.warning("Could not auto-dismiss avisos for %s: %s", client_name, e)
 
     log.info("Cliente vinculado: Telegram %d -> CRM %s (%s) service_id=%s",
              user.id, client_id, client_name, service_id)

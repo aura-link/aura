@@ -256,6 +256,123 @@ class MikroTikClient:
         result = await self.update_ppp_secret(secret_id, profile=profile)
         return result.get("success", False)
 
+    async def clear_address_list(self, list_name: str) -> int:
+        """Remove all entries from a firewall address-list. Returns count removed."""
+        def _clear():
+            api = self._connect()
+            try:
+                entries = list(api.path("/ip/firewall/address-list"))
+                ids = [dict(e)[".id"] for e in entries if dict(e).get("list") == list_name]
+                path = api.path("/ip/firewall/address-list")
+                for eid in ids:
+                    path.remove(eid)
+                return len(ids)
+            finally:
+                api.close()
+
+        return await self._run(_clear)
+
+    async def get_address_list_count(self, list_name: str) -> int:
+        """Count entries in a firewall address-list."""
+        def _count():
+            api = self._connect()
+            try:
+                entries = list(api.path("/ip/firewall/address-list"))
+                return sum(1 for e in entries if dict(e).get("list") == list_name)
+            finally:
+                api.close()
+
+        return await self._run(_count)
+
+    async def set_nat_rule_disabled(self, comment: str, disabled: bool) -> bool:
+        """Enable/disable a NAT rule by its comment. Returns True if found and updated."""
+        def _update():
+            api = self._connect()
+            try:
+                entries = list(api.path("/ip/firewall/nat"))
+                for e in entries:
+                    e = dict(e)
+                    if e.get("comment") == comment:
+                        path = api.path("/ip/firewall/nat")
+                        path.update(**{".id": e[".id"], "disabled": "true" if disabled else "false"})
+                        return True
+                return False
+            finally:
+                api.close()
+
+        return await self._run(_update)
+
+    async def set_scheduler_disabled(self, name: str, disabled: bool) -> bool:
+        """Enable/disable a scheduler by name. Returns True if found and updated."""
+        def _update():
+            api = self._connect()
+            try:
+                entries = list(api.path("/system/scheduler"))
+                for e in entries:
+                    e = dict(e)
+                    if e.get("name") == name:
+                        path = api.path("/system/scheduler")
+                        path.update(**{".id": e[".id"], "disabled": "true" if disabled else "false"})
+                        return True
+                return False
+            finally:
+                api.close()
+
+        return await self._run(_update)
+
+    async def run_script(self, name: str) -> bool:
+        """Execute a script by name. Returns True if found and executed."""
+        def _run_it():
+            api = self._connect()
+            try:
+                entries = list(api.path("/system/script"))
+                for e in entries:
+                    e = dict(e)
+                    if e.get("name") == name:
+                        list(api.path("/system/script")("run", **{".id": e[".id"]}))
+                        return True
+                return False
+            except Exception as exc:
+                log.warning("run_script(%s) error: %s", name, exc)
+                return False
+            finally:
+                api.close()
+
+        return await self._run(_run_it)
+
+    async def add_address_list_entry(self, list_name: str, address: str, comment: str = "") -> bool:
+        """Add an entry to a firewall address-list."""
+        def _add():
+            api = self._connect()
+            try:
+                path = api.path("/ip/firewall/address-list")
+                path.add(list=list_name, address=address, comment=comment)
+                return True
+            except Exception as e:
+                log.warning("add_address_list_entry(%s, %s) error: %s", list_name, address, e)
+                return False
+            finally:
+                api.close()
+
+        return await self._run(_add)
+
+    async def disconnect_session(self, secret_name: str) -> bool:
+        """Disconnect active PPPoE session by secret name so client reconnects with new profile."""
+        def _disconnect():
+            api = self._connect()
+            try:
+                sessions = list(api.path("/ppp/active"))
+                for s in sessions:
+                    s = dict(s)
+                    if (s.get("name") or "").lower() == secret_name.lower():
+                        api.path("/ppp/active").remove(s[".id"])
+                        return True
+                return False
+            finally:
+                api.close()
+
+        return await self._run(_disconnect)
+
     async def test_connection(self) -> bool:
         """Prueba la conexion al MikroTik."""
         try:

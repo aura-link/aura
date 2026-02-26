@@ -1,0 +1,13 @@
+services:
+  avisos-portal:
+    build: .
+    container_name: avisos-portal
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      - ADMIN_TOKEN=auralink-avisos-2026
+      - BOT_DB_PATH=/app/botdata/aura.db
+    volumes:
+      - /root/.ssh:/root/.ssh:ro
+      - ./data:/app/data
+      - /root/aura-bot/data:/app/botdata:ro
