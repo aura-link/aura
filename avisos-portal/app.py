@@ -4,8 +4,8 @@
 Serves dynamic announcements to clients and handles dismiss via
 MikroTik address-list removal over SSH. Admin API for bot integration.
 Verifies Telegram registration against bot's SQLite DB.
-Supports 3 modes: soft (always internet), medium (strict verify + temp dismiss),
-strict (must register to browse).
+Supports 4 modes: soft (always internet), medium (strict verify + temp dismiss),
+strict (5min temp dismiss for unregistered), persistent (same as strict, indefinite).
 """
 import asyncio
 import json
@@ -25,6 +25,14 @@ DATA_DIR = Path(__file__).parent / "data"
 CURRENT_FILE = DATA_DIR / "current.json"
 ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "auralink-avisos-2026")
 BOT_DB_PATH = os.getenv("BOT_DB_PATH", "/app/botdata/aura.db")
+SYNC_INTERVAL = 300  # 5 minutes
+
+# Accounts that should NEVER see avisos (not real clients)
+EXCLUDED_PPP_NAMES = {
+    "martinpintort", "casacristinat", "cristinavillasenorcc", "mabilaliat",
+    "deportest", "diftomatlan", "javieraraizat", "lauracumbre", "marciat",
+    "oscarsunyt", "pelonc", "peloncoco", "tiagloria", "renecumbre",
+}
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("avisos")
@@ -61,20 +69,40 @@ def _check_admin_token(request) -> bool:
     return request.headers.get("X-Admin-Token") == ADMIN_TOKEN
 
 
+def _names_match(ppp_name: str, crm_name: str) -> bool:
+    """Check if a PPPoE username matches a CRM client name.
+
+    Uses multiple strategies: exact, substring, token overlap.
+    Both inputs should be pre-normalized (lowercase, no spaces).
+    """
+    if not ppp_name or not crm_name:
+        return False
+    if crm_name == ppp_name or crm_name in ppp_name or ppp_name in crm_name:
+        return True
+    # Token overlap: check if 4-char tokens from ppp match crm
+    ppp_tokens = [ppp_name[i:i+4] for i in range(0, len(ppp_name)-3)]
+    if ppp_tokens:
+        match_count = sum(1 for t in ppp_tokens if t in crm_name)
+        if match_count >= len(ppp_tokens) * 0.5:
+            return True
+    return False
+
+
 def _check_registered(ppp_name: str) -> bool:
     """Check if a PPPoE secret name has a linked Telegram account in the bot's DB."""
     if not Path(BOT_DB_PATH).exists():
         log.warning("Bot DB not found at %s", BOT_DB_PATH)
         return False
+    # Excluded accounts count as "registered" to bypass the portal
+    if ppp_name.lower() in EXCLUDED_PPP_NAMES:
+        return True
     try:
         conn = sqlite3.connect(f"file:{BOT_DB_PATH}?mode=ro", uri=True)
         cursor = conn.execute("SELECT crm_client_name FROM customer_links")
         ppp_lower = ppp_name.lower().replace(" ", "")
         for row in cursor:
             crm_name = (row[0] or "").lower().replace(" ", "")
-            if not crm_name:
-                continue
-            if crm_name == ppp_lower or crm_name in ppp_lower or ppp_lower in crm_name:
+            if _names_match(ppp_lower, crm_name):
                 conn.close()
                 return True
         conn.close()
@@ -124,12 +152,38 @@ async def _remove_from_avisos(client_ip: str) -> bool:
 
 
 async def _temp_dismiss_24h(client_ip: str, ppp_name: str | None) -> bool:
-    """Remove from avisos and add to avisos-visto with 24h timeout."""
-    comment = ppp_name if ppp_name else ""
+    """Remove from avisos and add to avisos-visto permanently.
+    The bot's aviso scheduler clears avisos-visto every 3 days when re-publishing,
+    so clients will see the aviso again on the next cycle. Permanent entries survive reboots."""
+    comment = ppp_name or ""
     mk_script = (
         f'/ip firewall address-list remove [find where list=avisos address={client_ip}]; '
         f'/ip firewall address-list remove [find where list=avisos-visto address={client_ip}]; '
-        f'/ip firewall address-list add list=avisos-visto address={client_ip} timeout=24h comment="{comment}"'
+        f'/ip firewall address-list add list=avisos-visto address={client_ip} comment="{comment}"'
+    )
+    cmd = (
+        f"ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -o BatchMode=yes "
+        f'{MIKROTIK_USER}@{MIKROTIK_IP} "{mk_script}"'
+    )
+    try:
+        proc = await asyncio.create_subprocess_shell(
+            cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+        await asyncio.wait_for(proc.communicate(), timeout=15)
+        return proc.returncode == 0
+    except Exception:
+        return False
+
+
+async def _temp_dismiss_5min(client_ip: str, ppp_name: str | None) -> bool:
+    """Remove from avisos and add to avisos-visto with 5-minute timeout.
+    Dynamic entry (flag D) that auto-expires after 5 min.
+    When it expires, populate-avisos re-adds the client on its next cycle."""
+    comment = ppp_name or ""
+    mk_script = (
+        f'/ip firewall address-list remove [find where list=avisos address={client_ip}]; '
+        f'/ip firewall address-list remove [find where list=avisos-visto address={client_ip}]; '
+        f'/ip firewall address-list add list=avisos-visto address={client_ip} timeout=00:05:00 comment="{comment}"'
     )
     cmd = (
         f"ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -o BatchMode=yes "
@@ -277,7 +331,7 @@ def _render_html(state: dict) -> str:
       </div>
     </div>"""
 
-    # Mode: soft (always internet), medium (verify strict + temp dismiss), strict (verify only)
+    # Mode: soft (always internet), medium (verify strict + temp dismiss), strict/persistent (verify only, 5min temp)
     mode = state.get("mode", "normal")
     if verify_registro and mode == "normal":
         mode = "strict"  # backward compatibility
@@ -291,7 +345,7 @@ def _render_html(state: dict) -> str:
     <button class="entendido-btn" onclick="verifyRegistro()" id="btn-verify">Ya me registr&eacute;</button>
     <button class="later-btn" onclick="dismissTemp()" id="btn-later">Lo har&eacute; despu&eacute;s</button>
     <div id="error-msg" class="error-msg"></div>"""
-    elif mode == "strict":
+    elif mode in ("strict", "persistent"):
         buttons_html = """
     <button class="entendido-btn" onclick="verifyRegistro()" id="btn-verify">Ya me registr&eacute;</button>
     <div id="error-msg" class="error-msg"></div>"""
@@ -385,8 +439,15 @@ body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
   <div id="temp-dismiss" class="temp-msg">
     <div class="icon">&#9200;</div>
     <h2>Aviso pendiente</h2>
-    <p>Recuerda registrarte antes del 31 de marzo.<br>Este aviso aparecera de nuevo la proxima vez que navegues.</p>
+    <p>Recuerda registrarte en Telegram.<br>Este aviso aparecera de nuevo la proxima vez que navegues.</p>
     <a href="https://t.me/auralinkmonitor_bot" class="telegram-link" style="margin-top:20px" target="_blank">Abrir Telegram para registrarme</a>
+  </div>
+
+  <div id="temp-5min" class="temp-msg">
+    <div class="icon">&#9203;</div>
+    <h2>5 minutos de navegacion</h2>
+    <p>No encontramos tu registro en Telegram.<br>Tienes <strong style="color:#f59e0b">5 minutos</strong> para navegar. Despues, este aviso aparecera de nuevo.<br><br>Usa este tiempo para descargar Telegram y registrarte.</p>
+    <a href="https://t.me/auralinkmonitor_bot" class="telegram-link" style="margin-top:20px" target="_blank">Registrarme ahora en Telegram</a>
   </div>
 
   <div id="soft-dismiss" class="temp-msg">
@@ -419,6 +480,10 @@ function verifyRegistro(){{
       if(d.ok){{
         document.getElementById('content').style.display='none';
         document.getElementById('success').style.display='block';
+      }}else if(d.temp_dismiss){{
+        document.getElementById('content').style.display='none';
+        document.getElementById('temp-5min').style.display='block';
+        setTimeout(function(){{window.location.href='http://www.google.com'}},2000);
       }}else{{
         btn.disabled=false;
         if(btnL)btnL.disabled=false;
@@ -465,14 +530,11 @@ function dismissTemp(){{
   btn.textContent='Procesando...';
   fetch('/api/dismiss-temp',{{method:'POST'}})
     .then(function(r){{return r.json()}})
-    .then(function(d){{
-      document.getElementById('content').style.display='none';
-      document.getElementById('temp-dismiss').style.display='block';
+    .then(function(){{
+      setTimeout(function(){{window.location.href='http://www.google.com'}},500);
     }})
     .catch(function(){{
-      btn.disabled=false;
-      if(btnV)btnV.disabled=false;
-      btn.innerHTML='Lo har&eacute; despu&eacute;s';
+      setTimeout(function(){{window.location.href='http://www.google.com'}},500);
     }});
 }}
 function dismiss(){{
@@ -506,6 +568,19 @@ async def index(request):
     if not state:
         # No active announcement — return 204 (captive portal interprets as "internet OK")
         return web.Response(status=204)
+
+    # Auto-dismiss: if client is registered, dismiss and return 204 (internet OK)
+    client_ip = request.remote
+    if client_ip and client_ip.startswith(ALLOWED_PREFIXES):
+        try:
+            ppp_name = await _get_ppp_name(client_ip)
+            if ppp_name and _check_registered(ppp_name):
+                await _permanent_dismiss(client_ip, ppp_name)
+                log.info("Auto-dismiss on load: %s (%s) is registered", ppp_name, client_ip)
+                return web.Response(status=204)
+        except Exception as e:
+            log.warning("Auto-dismiss check failed for %s: %s", client_ip, e)
+
     html = _render_html(state)
     return web.Response(text=html, content_type="text/html")
 
@@ -559,28 +634,39 @@ async def verify_registro(request):
 
         if mode == "soft":
             if registered:
-                # Registered: permanent dismiss
                 await _permanent_dismiss(client_ip, ppp_name)
                 log.info("Soft verify: %s (%s) registered=True — permanent dismiss", ppp_name, client_ip)
             else:
-                # Not registered: 24h temporary dismiss
                 await _temp_dismiss_24h(client_ip, ppp_name)
                 log.info("Soft verify: %s (%s) registered=False — 24h temp dismiss", ppp_name, client_ip)
             return web.json_response({"ok": True, "registered": registered})
-        else:
-            # Medium/Strict: strict verification
+        elif mode == "medium":
             if registered:
                 await _permanent_dismiss(client_ip, ppp_name)
                 log.info("Verified registered: %s (%s) — permanent dismiss", ppp_name, client_ip)
                 return web.json_response({"ok": True, "registered": True})
             else:
-                log.info("Not registered: %s (%s)", ppp_name, client_ip)
+                log.info("Not registered (medium): %s (%s)", ppp_name, client_ip)
                 return web.json_response({
                     "ok": False,
                     "registered": False,
                     "message": "No encontramos tu registro en Telegram.<br><br>"
                                "Abre Telegram, busca <b>@auralinkmonitor_bot</b>, "
                                "presiona <b>Iniciar</b> y vincula tu cuenta con tu nombre."
+                })
+        else:
+            # Strict/Persistent: 5-min temp dismiss for unregistered
+            if registered:
+                await _permanent_dismiss(client_ip, ppp_name)
+                log.info("Verified registered: %s (%s) — permanent dismiss", ppp_name, client_ip)
+                return web.json_response({"ok": True, "registered": True})
+            else:
+                await _temp_dismiss_5min(client_ip, ppp_name)
+                log.info("Not registered (strict/persistent): %s (%s) — 5min temp dismiss", ppp_name, client_ip)
+                return web.json_response({
+                    "ok": False,
+                    "temp_dismiss": True,
+                    "message": "No encontramos tu registro. Tienes 5 minutos para navegar."
                 })
 
     except Exception as e:
@@ -601,12 +687,12 @@ async def dismiss_temp(request):
 
     try:
         ppp_name = await _get_ppp_name(client_ip)
-        comment = ppp_name if ppp_name else ""
-        # Remove from avisos + add to avisos-visto with 24h timeout
+        comment = ppp_name or ""
+        # Remove from avisos + add to avisos-visto permanently (survives reboot)
         mk_script = (
             f'/ip firewall address-list remove [find where list=avisos address={client_ip}]; '
             f'/ip firewall address-list remove [find where list=avisos-visto address={client_ip}]; '
-            f'/ip firewall address-list add list=avisos-visto address={client_ip} timeout=24h comment="{comment}"'
+            f'/ip firewall address-list add list=avisos-visto address={client_ip} comment="{comment}"'
         )
         cmd = (
             f"ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -o BatchMode=yes "
@@ -721,7 +807,156 @@ async def admin_status(request):
     return web.json_response({"ok": True, "active": False})
 
 
+# ---------------------------------------------------------------------------
+# Background sync: auto-exclude registered + excluded accounts from avisos
+# ---------------------------------------------------------------------------
+async def _get_active_ppp_sessions() -> dict[str, str]:
+    """Get all active PPPoE sessions as {username: ip} using terse output."""
+    cmd = (
+        f"ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -o BatchMode=yes "
+        f"{MIKROTIK_USER}@{MIKROTIK_IP} /ppp/active/print\\ terse"
+    )
+    try:
+        proc = await asyncio.create_subprocess_shell(
+            cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=20)
+        if proc.returncode == 0:
+            result = {}
+            for line in stdout.decode().strip().split("\n"):
+                name = addr = ""
+                for part in line.strip().split():
+                    if part.startswith("name="):
+                        name = part[5:]
+                    elif part.startswith("address="):
+                        addr = part[8:]
+                if name and addr:
+                    result[name] = addr
+            return result
+    except Exception as e:
+        log.error("Error getting PPP sessions: %s", e)
+    return {}
+
+
+async def _get_avisos_visto_ips() -> set[str]:
+    """Get all IPs currently in avisos-visto using terse output."""
+    cmd = (
+        f"ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -o BatchMode=yes "
+        f'{MIKROTIK_USER}@{MIKROTIK_IP} "/ip firewall address-list print terse where list=avisos-visto"'
+    )
+    try:
+        proc = await asyncio.create_subprocess_shell(
+            cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=15)
+        if proc.returncode == 0:
+            ips = set()
+            for line in stdout.decode().strip().split("\n"):
+                for part in line.strip().split():
+                    if part.startswith("address="):
+                        ips.add(part[8:])
+            return ips
+    except Exception as e:
+        log.error("Error getting avisos-visto: %s", e)
+    return set()
+
+
+def _get_registered_names() -> set[str]:
+    """Get all CRM client names from bot DB that are registered (linked)."""
+    if not Path(BOT_DB_PATH).exists():
+        return set()
+    try:
+        conn = sqlite3.connect(f"file:{BOT_DB_PATH}?mode=ro", uri=True)
+        cursor = conn.execute("SELECT crm_client_name FROM customer_links")
+        names = {(row[0] or "").lower().replace(" ", "") for row in cursor if row[0]}
+        conn.close()
+        return names
+    except Exception as e:
+        log.error("Error reading registered names: %s", e)
+        return set()
+
+
+def _ppp_matches_registered(ppp_name: str, registered_names: set[str]) -> bool:
+    """Check if a PPPoE username matches any registered CRM name."""
+    ppp_lower = ppp_name.lower().replace(" ", "")
+    for crm_name in registered_names:
+        if _names_match(ppp_lower, crm_name):
+            return True
+    return False
+
+
+async def _add_to_avisos_visto(ip: str, comment: str) -> bool:
+    """Add IP to avisos-visto permanently and remove from avisos."""
+    mk_script = (
+        f'/ip firewall address-list remove [find where list=avisos address={ip}]; '
+        f'/ip firewall address-list add list=avisos-visto address={ip} comment="{comment}"'
+    )
+    cmd = (
+        f"ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -o BatchMode=yes "
+        f'{MIKROTIK_USER}@{MIKROTIK_IP} "{mk_script}"'
+    )
+    try:
+        proc = await asyncio.create_subprocess_shell(
+            cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+        await asyncio.wait_for(proc.communicate(), timeout=10)
+        return proc.returncode == 0
+    except Exception:
+        return False
+
+
+async def sync_avisos_exclusions():
+    """Background task: auto-add registered + excluded accounts to avisos-visto."""
+    await asyncio.sleep(10)  # wait for startup
+    while True:
+        try:
+            log.info("Sync: starting cycle...")
+            sessions = await _get_active_ppp_sessions()
+            log.info("Sync: found %d PPP sessions", len(sessions))
+            if not sessions:
+                log.warning("Sync: no PPP sessions found, skipping")
+                await asyncio.sleep(SYNC_INTERVAL)
+                continue
+
+            visto_ips = await _get_avisos_visto_ips()
+            registered_names = _get_registered_names()
+            log.info("Sync: %d in avisos-visto, %d registered names", len(visto_ips), len(registered_names))
+            added = 0
+
+            for username, ip in sessions.items():
+                if ip in visto_ips:
+                    continue
+                # Check if excluded account
+                if username.lower() in EXCLUDED_PPP_NAMES:
+                    await _add_to_avisos_visto(ip, username)
+                    added += 1
+                    log.info("Sync: excluded %s (%s)", username, ip)
+                    continue
+                # Check if registered in Telegram
+                if _ppp_matches_registered(username, registered_names):
+                    await _add_to_avisos_visto(ip, username)
+                    added += 1
+                    log.info("Sync: registered %s (%s)", username, ip)
+
+            log.info("Sync: cycle complete, added %d to avisos-visto", added)
+        except Exception as e:
+            log.error("Sync error: %s", e)
+        await asyncio.sleep(SYNC_INTERVAL)
+
+
+async def on_startup(app_instance):
+    app_instance["sync_task"] = asyncio.create_task(sync_avisos_exclusions())
+
+
+async def on_cleanup(app_instance):
+    task = app_instance.get("sync_task")
+    if task:
+        task.cancel()
+
+
 app = web.Application()
+app.on_startup.append(on_startup)
+app.on_cleanup.append(on_cleanup)
 app.router.add_get("/", index)
 app.router.add_post("/api/entendido", dismiss)
 app.router.add_post("/api/verify-registro", verify_registro)

@@ -6,6 +6,7 @@ def build_system_prompt(
     client_name: str | None = None,
     client_id: str | None = None,
     active_incidents: list[dict] | None = None,
+    diagnostic_context: str | None = None,
 ) -> str:
     base = (
         "Eres Aura, la asistente virtual de AURALINK, un proveedor de internet (WISP) "
@@ -67,5 +68,8 @@ def build_system_prompt(
             "Si un cliente pregunta por problemas de conexion, primero verifica si "
             "esta en una zona afectada antes de hacer diagnosticos individuales.\n"
         )
+
+    if diagnostic_context:
+        base += f"\n{diagnostic_context}\n"
 
     return base

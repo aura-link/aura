@@ -166,10 +166,10 @@ class NetworkMonitor:
                     # Era un incidente confirmado → resolver
                     await self._handle_recovery(dev_id, name, site_id)
 
-        # Confirmar pending downs que persisten
+        # Confirmar pending downs que persisten (requiere 3 polls consecutivos ~6 min)
         confirmed = []
         for dev_id, ts in list(self._pending_downs.items()):
-            if now - ts >= config.MONITOR_INTERVAL:
+            if now - ts >= config.MONITOR_INTERVAL * 3:
                 confirmed.append(dev_id)
 
         for dev_id in confirmed:
@@ -222,23 +222,23 @@ class NetworkMonitor:
         incident_id = await self.db.create_incident(
             device_id, device_name, site_id, site_name, len(affected),
         )
-        ref_id = str(incident_id)
 
         log.warning("INCIDENTE #%d: %s (%s) en zona %s, %d clientes afectados",
                      incident_id, device_name, device_ip, site_name, len(affected))
 
-        # Notificar admins
+        # Notificar admins (usa incident_id — admins siempre reciben)
         ts = datetime.now(timezone.utc).strftime("%d/%m/%Y %H:%M UTC")
         await self.notifier.notify_admins(
-            "outage_admin", ref_id,
+            "outage_admin", str(incident_id),
             device_name=device_name, zone_name=site_name,
             affected_count=len(affected), timestamp=ts,
         )
 
-        # Notificar clientes afectados
+        # Notificar clientes afectados (usa device_id — cooldown por dispositivo, no por incidente)
         if affected:
             sent = await self.notifier.notify_affected_clients(
-                affected, "outage_client", ref_id, zone_name=site_name,
+                affected, "outage_client", f"outage_dev_{device_id}",
+                zone_name=site_name,
             )
             log.info("Notificados %d/%d clientes del incidente #%d",
                      sent, len(affected), incident_id)
@@ -256,6 +256,7 @@ class NetworkMonitor:
         # Calcular duracion
         started = incident.get("started_at", "")
         duration_str = ""
+        duration_secs = 0
         if started:
             try:
                 start_dt = datetime.fromisoformat(started)
@@ -266,24 +267,24 @@ class NetworkMonitor:
 
         # Resolver incidente
         await self.db.resolve_incident(incident_id)
-        ref_id = str(incident_id)
 
         log.info("RECUPERADO incidente #%d: %s, duracion: %s",
                  incident_id, device_name, duration_str)
 
-        # Notificar admins
+        # Notificar admins (siempre)
         await self.notifier.notify_admins(
-            "recovery_admin", f"recovery_{ref_id}",
+            "recovery_admin", f"recovery_{incident_id}",
             device_name=device_name, zone_name=site_name,
             duration=duration_str or "N/A",
         )
 
-        # Notificar clientes
-        if site_id:
+        # Notificar clientes solo si la caida duro mas de 10 minutos
+        # (caidas cortas = flap, no vale la pena molestar al cliente)
+        if site_id and duration_secs >= 600:
             clients = await self.zone_mapper.get_affected_clients(site_id)
             if clients:
                 await self.notifier.notify_affected_clients(
-                    clients, "recovery_client", f"recovery_{ref_id}",
+                    clients, "recovery_client", f"recovery_dev_{device_id}",
                     zone_name=site_name,
                 )
 

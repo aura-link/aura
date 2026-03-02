@@ -30,6 +30,7 @@ from src.bot.handlers import billing_admin, receipts
 from src.bot.handlers import onboarding_admin
 from src.bot.handlers import avisos_admin
 from src.bot.handlers import plan_change
+from src.diagnostics.engine import DiagnosticEngine
 from src.utils.logger import log
 
 
@@ -61,6 +62,10 @@ async def post_init(application: Application):
             log.warning("MikroTik error: %s, continuando sin MikroTik", e)
             mk = None
     application.bot_data["mikrotik"] = mk
+
+    # Diagnostic engine (Tier 1 - before Claude AI)
+    diagnostic_engine = DiagnosticEngine(nms, crm, mk, db)
+    application.bot_data["diagnostic_engine"] = diagnostic_engine
 
     # Claude AI
     tool_executor = ToolExecutor(nms, crm, mk, db)

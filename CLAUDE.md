@@ -28,8 +28,9 @@ Migración de UISP desde servidor local (laptop 10.1.1.254) a VPS en la nube (Co
 ### VPS - UISP Cloud
 - **IP**: 217.216.85.65 (Contabo)
 - **DNS**: server.auralink.link → 217.216.85.65
+- **Contabo login**: auralinkclientes@gmail.com / f8FWcAgJFQ8GeZAG (contraseña VPS root: IWQ240f8)
 - **OS**: Debian/Ubuntu con Docker
-- **UISP**: v3.0.151 (Docker containers)
+- **UISP**: v3.0.159 (Docker containers, updated 2026-03-01 from v3.0.151)
 - **SSH**: `ssh vps` (root, key auth configurado)
 - **ZeroTier IP**: 10.147.17.92 (red BalanceadorTomatlan - 9f77fc393ecd131f)
 
@@ -58,10 +59,14 @@ Migración de UISP desde servidor local (laptop 10.1.1.254) a VPS en la nube (Co
 - **Función**: PPPoE server, PCC load balancing con múltiples WANs
 - **Interfaz PPPoE**: SFP-LAN, Pool 10.10.1.2-254 + 10.10.2.2-254 (506 IPs total)
 - **~199 sesiones PPPoE activas**, 254 secrets (clienteprueba deshabilitado)
-- **WANs activas (6)**: WAN1 (Starlink2/ether1), WAN5 (StarlinkMini/ether3), WAN6 (StarlinkTotin/ether4), WAN7 (Chuy1/ether5), WAN8 (Chuy2/ether6), WAN9 (StarlinkAurora/ether7)
-- **WANs deshabilitadas**: WAN2 (Sergio/ether2-WAN — <10 Mbps, deshabilitada 2026-02-24), WAN3 (Presidencia40), WAN4 (Presidencia169), WAN10 (Chaviton/ether8 — 10 Mbps, no vale la pena)
+- **WANs activas (6)**: WAN1 (Starlink2/ether1, :6/0), WAN5 (StarlinkMini/ether3, :6/1), WAN10 (Chaviton/macvlan ether8, :6/2), WAN7 (Chuy1/ether5, :6/3), WAN8 (Chuy2/ether6, :6/4), WAN9 (StarlinkAurora/ether7, :6/5)
+- **WANs deshabilitadas**: WAN2 (Sergio/ether2-WAN — <10 Mbps), WAN3 (Presidencia40), WAN4 (Presidencia169), WAN6 (StarlinkTotin/ether4 — ISP Force200 issues, deshabilitada 2026-02-27)
+- **WAN11 pendiente**: macvlan bajo ether8-WAN (192.168.104.10/24), ISP no activo aún — gateway no responde
+- **ether8-WAN**: interfaz física padre de macvlans WAN10 y WAN11, NO hace masquerade — cada macvlan es independiente
 - **PCC**: Per-Connection Classifier src-address:6/x distribuyendo en 6 WANs activas (0 slots vacíos)
 - **QoS**: CAKE queue discipline por WAN + TLS SNI-based classification (reemplazó Layer 7) — ICMP/ACK p1, DNS/Gaming/VoIP p2, VideoCall/Chat p3, Video p6, Social p7
+- **QUIC bloqueado**: `chain=forward action=drop protocol=udp dst-port=443 in-interface=SFP-LAN` — fuerza TCP para que QoS SNI funcione (96% del tráfico video/social usaba QUIC bypaseando SNI)
+- **QoS SNI wildcards**: usar `*keyword*` no `*.domain.com` en RouterOS 7 tls-host
 - **Morosos**: perfil "Morosos" (64k/64k) + address-list + firewall drop + captive portal HTTP+HTTPS + allow UISP 443 (para que morosos reporten a UISP)
 - **Servicios deshabilitados**: FTP, Telnet, WWW, api-ssl, bandwidth-server
 - **SSH**: strong-crypto=yes, neighbor discovery deshabilitado
@@ -84,7 +89,7 @@ Migración de UISP desde servidor local (laptop 10.1.1.254) a VPS en la nube (Co
 - **Credenciales SSH**: ubnt/Auralink2021 o AURALINK/Auralink2021 o ubnt/Casimposible*7719Varce*1010
 - **SSH requiere**: `-o HostKeyAlgorithms=+ssh-rsa -o PubkeyAcceptedAlgorithms=+ssh-rsa`
 - **Total Ubiquiti en PPP**: 184
-- **Total en UISP**: 201 autorizados (171 conectados, 30 desconectados — incluye infraestructura)
+- **Total en UISP**: 204 autorizados (203 conectados, 1 desconectado — incluye infraestructura)
 
 ### Infraestructura de red (10.1.1.x)
 - Equipos de infraestructura (APs, bridges, routers) en la red 10.1.1.x
@@ -366,7 +371,7 @@ killall -9 udapi-bridge
 | `/home/app/unms/api.js` | 3 | Backend API — genera connection string |
 | `/home/app/unms/device-ws.js` | 2 | WebSocket handler |
 | `/home/app/unms/cli/unms-key.js` | 1 | CLI key generator |
-| `/home/app/unms/public/assets/index-BF6PYhCd.js` | 1 | Frontend JS |
+| `/home/app/unms/public/assets/index-9_kxL8KA.js` | 1 | Frontend JS (era `index-BF6PYhCd.js` en v3.0.151) |
 
 **Fix aplicado**: `sed -i 's/allowSelfSignedCertificate/allowUntrustedCertificate/g'` en los 4 archivos + `docker restart unms-api`.
 
@@ -430,6 +435,87 @@ cfgmtd -w -p /etc/
 
 **Prevención**: Otros dispositivos de infra podrían tener el mismo problema de DNS. Si un infra device aparece desconectado de UISP pero responde a ping, verificar `/var/log/unms.log` por "Name or service not known" y cambiar DNS a 10.1.1.1.
 
+### 20. 10.1.1.212 y 10.1.1.229 desconectadas por device-specific key huérfana (2026-02-26)
+**Problema**: 2 dispositivos de infraestructura (Recuros-Gloria LiteBeam 5AC y Sectorial Cumbre LiteAP GPS) con RPC timeout en UISP — se conectaban al WebSocket, recibían `unmsSetup`, pero UISP no obtenía respuesta a pings/statistics → "reconnecting after 30s of inactivity" → loop infinito.
+
+**Causa raíz**: Device-specific keys huérfanas (terminan en AAAAA) en `system.cfg` de las antenas, sin matching key en la BD de UISP (fueron limpiadas en sesiones anteriores). La antena encriptaba con key vieja, UISP hacía key exchange pero los RPC requests timeouted.
+
+**Solución**:
+1. Reset URI en system.cfg a master key: `sBRaeWB1kiH4cxBIWmBTEyuxIIeULvidfT3s7UXpR2ZbapIV`
+2. `cfgmtd -w -p /etc/` (guardar a flash)
+3. `rm -f /tmp/running.cfg && cp /tmp/system.cfg /tmp/running.cfg`
+4. `killall -9 udapi-bridge`
+5. Reset key en BD: `UPDATE unms.device SET key=NULL, key_exchange_status=NULL WHERE mac='...'`
+6. Reboot de la antena (para confirmar persistencia)
+
+**Dispositivos fijados:**
+| Dispositivo | IP | MAC | Firmware |
+|---|---|---|---|
+| Recuros-Gloria | 10.1.1.212 | f4:e2:c6:94:6f:88 | XW.v6.3.24 |
+| Sectorial Cumbre | 10.1.1.229 | e4:38:83:b2:b9:89 | WA.v8.7.18 |
+
+**Nota 10.1.1.229**: En primer intento, el fix se aplicó pero no se guardó correctamente a flash — tras reboot volvió a cargar la key vieja. Segundo intento con `cfgmtd -w -p /etc/` explícito + reboot → conectada correctamente.
+
+**Resultado**: Ambas reconectadas. UISP: 204 autorizados, 203 conectados.
+
+### 21. Auto-dismiss avisos fallaba por matching de nombres (2026-02-26)
+**Problema**: Clientes registrados (ej: Abel de Loera, IP 10.10.1.170) seguían viendo el captive portal de avisos. La función `_dismiss_from_avisos()` en registration.py intentaba matchear el nombre CRM "Abel Loera Tomatlan" contra el PPPoE username "abelt" usando substring matching — fallaba porque "abelt" no es substring de "abelloeratomattan" ni viceversa.
+
+**Fix**: Reescrita `_dismiss_from_avisos()` con 2 estrategias:
+1. **Match por IP del dispositivo CRM** (más confiable): usa la IP que ya se obtuvo del CRM durante el registro (`reg_matches[].ip`) y busca la sesión PPPoE activa con esa IP
+2. **Fallback por find_secret_by_name()**: usa la función existente del MikroTik client que tiene matching robusto (exacto, parcial, sin espacios)
+
+**Archivo**: `aura-bot/src/bot/handlers/registration.py` — función `_dismiss_from_avisos(mk, client_name, device_ip="")`
+
+### 22. Sectorial Cumbre (10.1.1.229) caía por CPU saturado (2026-03-01)
+**Problema**: LiteAP GPS en 10.1.1.229 entraba en loop "connection established → 30s inactivity → reconnecting" con UISP. RPC requests (statistics, ping) timeouted constantemente. CPU no se "estresaba" según el usuario.
+
+**Causa raíz**: `ubntspecd` (airview/spectrum analyzer) habilitado en producción consumía 22% CPU constante. Combinado con `ustatsd` (16%), `ksoftirqd` (11%, tráfico WiFi), y `ubnt-gps-reader` (5%), el CPU solo tenía **7% idle**. `udapi-bridge` no tenía suficiente CPU para responder RPC requests dentro del timeout de 30s.
+
+**Solución**: Desactivar airview: `sed -i 's/airview.status=enabled/airview.status=disabled/' /tmp/system.cfg && cfgmtd -w -p /etc/` + reboot. CPU idle subió de 7%→50%, load average de 1.85→0.59. Conexión UISP estable.
+
+**Nota**: `ubnt-gps-reader` es hardcoded en firmware WA (LiteAP GPS), no se puede desactivar desde system.cfg. Pero sin airview, el CPU tiene suficiente margen.
+
+### 23. Monitor de red spammeaba notificaciones a clientes (2026-03-01)
+**Problema**: Clientes vinculados a Telegram recibían muchas notificaciones de "infraestructura caída" y "servicio restaurado" por equipos que flapping (suben y bajan repetidamente). Ej: Sectorial Cumbre generó 4 incidentes en 2 horas (40 clientes x 2 notificaciones x 4 veces = spam).
+
+**3 causas:**
+1. Anti-flap muy corto (1 poll = 2 min) — equipos que bajan 3-4 min ya generaban incidente
+2. Cooldown usaba `incident_id` como referencia — cada incidente nuevo bypaseaba el cooldown de 30 min
+3. Recovery notificaba a clientes incluso en caídas cortísimas (2-4 min)
+
+**Fix (3 cambios en `monitor.py`):**
+1. Anti-flap: `MONITOR_INTERVAL * 1` → `MONITOR_INTERVAL * 3` (~6 min) antes de confirmar caída
+2. Cooldown clientes: `ref_id = str(incident_id)` → `ref_id = f"outage_dev_{device_id}"` — cooldown por dispositivo, no por incidente
+3. Recovery a clientes: solo si `duration_secs >= 600` (>10 min) — flaps cortos no molestan
+
+Admins siguen recibiendo TODAS las notificaciones para visibilidad completa.
+
+### 24. UISP actualizado v3.0.151 → v3.0.159 (2026-03-01)
+**Pre-update backups**:
+- PostgreSQL: `/root/backups/uisp-pre-update-20260301.sql` (581 MB)
+- Data: `/root/backups/uisp-data-pre-update-20260301.tar.gz` (5.5 GB)
+- MikroTik: `pre-uisp-update.backup`
+
+**Proceso**: Bootstrap installer desde `https://uisp.ui.com/install` → `install-full.sh --update --unattended`. Requirió `docker compose down` manual antes de ejecutar (containers deben estar parados).
+
+**Post-update fixes**:
+1. `docker update --cpus=2 ucrm` — se pierde al recrear containers
+2. Connection string flag fix re-aplicado en 4 archivos (frontend cambió de `index-BF6PYhCd.js` a `index-9_kxL8KA.js`)
+3. CRM también se actualizó a v4.5.33
+
+**Cambios API detectados en v3.0.159**:
+- `GET /devices` ya NO acepta params `count` ni `page`/`pageSize` — devuelve todos los devices sin paginación
+
+**Resultado**: 194 conectados / 16 desconectados (mismos que antes del update). Infra devices hicieron flap durante el update pero el anti-flap del monitor los descartó correctamente ("flap descartado"). Sin notificaciones falsas a clientes.
+
+### 25. 5 infra devices DNS fix + 4 client antennas UISP fix (2026-03-01)
+**5 infra con DNS 8.8.8.8 inalcanzable**: AP Poblado (.101), ST Nahuapa (.203), ST Recursos (.250), ST Sergio (.189), Sectorial Nahuapa (.223), AP Recursos Sur (.249). Cambiado DNS a 10.1.1.1. Misma causa raíz que Problema #19.
+
+**4 antenas cliente**: .128 y .84 tenían URI viejo (10.1.1.254), .132 y .124 tenían device-specific key desync. Fix: URI corregido / key reseteada + reboot.
+
+**16 antenas sin acceso SSH**: Credenciales desconocidas, requieren acceso físico/web.
+
 ## Archivos Importantes en este Repositorio
 
 | Archivo | Descripción |
@@ -464,6 +550,9 @@ cfgmtd -w -p /etc/
 | `fix-27-missing.sh` | Configurar UISP connection string en 27 antenas sin entrada UISP |
 | `fix-decryption-7.sh` | Reset master key en 7 antenas con device-specific keys huérfanas |
 | `fix-19-uisp.sh` | Configurar UISP en 4 antenas online de 19 servicios CRM sin enlace NMS |
+| `admin-portal/app.py` | Backend admin portal: API endpoints + serve frontend (aiohttp) |
+| `admin-portal/static/index.html` | Frontend SPA: 7 pestañas (dashboard, clientes, mensajes, finanzas, registros, soporte, backups) |
+| `admin-portal/docker-compose.yml` | Container config, puerto 8092, volumes (bot DB, certs, backups, SSH) |
 
 ## Datos Técnicos airOS
 
@@ -475,6 +564,7 @@ cfgmtd -w -p /etc/
 - **Logs sistema**: `/var/log/messages`
 - **Guardar config**: `cfgmtd -w -p /etc/`
 - **MAC Ubiquiti prefixes**: 24:5A:4C, 28:70:4E, 60:22:32, 9C:05:D6, 0C:EA:14, E4:38:83, 70:A7:41, 44:D9:E7, 74:83:C2, 04:18:D6, AC:84:C6, 78:8A:20
+- **IMPORTANTE — Fix de antenas**: Siempre usar `edit system.cfg → cfgmtd -w -p /etc/ → reboot`. NO matar procesos manualmente (kill udapi-bridge) — no es confiable, los cambios solo aplican correctamente tras reboot.
 
 ## Nginx UISP - Notas
 
@@ -520,17 +610,20 @@ cfgmtd -w -p /etc/
 | `src/main.py` | Entry point |
 | `src/config.py` | Carga .env |
 | `src/bot/app.py` | Telegram Application + handlers + schedulers |
-| `src/bot/handlers/conversation.py` | Mensajes libres → Claude AI (con filtro + rate limit) |
+| `src/bot/handlers/conversation.py` | Mensajes libres → Tier 1 diagnostico + Claude AI (con filtro + rate limit) |
 | `src/bot/handlers/avisos_admin.py` | /aviso, /registrados + aviso scheduler (3 modos) |
 | `src/bot/handlers/plan_change.py` | /cambiarplan + aprobacion admin + aplicacion dia 1 |
 | `src/bot/handlers/registration.py` | /vincular + fallback soporte humano |
-| `src/ai/claude_client.py` | Anthropic SDK wrapper con tool use loop |
-| `src/ai/system_prompt.py` | System prompt dinamico por rol |
+| `src/diagnostics/__init__.py` | Package diagnostico automatico |
+| `src/diagnostics/engine.py` | DiagnosticEngine: CRM + UISP + PPPoE + Ping → clasificacion |
+| `src/diagnostics/auto_responder.py` | Respuestas automaticas para high/critical + format_diagnostic_context |
+| `src/ai/claude_client.py` | Anthropic SDK wrapper con tool use loop + diagnostic_context |
+| `src/ai/system_prompt.py` | System prompt dinamico por rol + diagnostico pre-ejecutado |
 | `src/ai/tools.py` | 9 tool definitions para Claude |
 | `src/ai/tool_executor.py` | Despacha tool calls → UISP/MikroTik |
-| `src/integrations/uisp_nms.py` | UISP NMS client |
+| `src/integrations/uisp_nms.py` | UISP NMS client + find_device_by_site_id |
 | `src/integrations/uisp_crm.py` | UISP CRM client |
-| `src/integrations/mikrotik.py` | MikroTik RouterOS API |
+| `src/integrations/mikrotik.py` | MikroTik RouterOS API (ping fix librouteros 4.0) |
 | `src/utils/filter.py` | Pre-filtro de relevancia |
 
 ### Ejecucion
@@ -551,8 +644,9 @@ El bot incluye un monitor de red en background que:
 - Detecta caídas de infraestructura cada 2 min (polling UISP)
 - Identifica clientes afectados via jerarquía de sitios (zone_mapping)
 - Envía notificaciones Telegram automáticas (con anti-spam 30 min cooldown)
-- Anti-flap: confirma caída solo si persiste 2 polls consecutivos
+- Anti-flap: confirma caída solo si persiste 3 polls consecutivos (~6 min)
 - Responde automáticamente durante incidentes/mantenimiento (sin llamar Claude, $0)
+- Notificaciones a clientes: cooldown 30 min por dispositivo, recovery solo si caída >10 min (evita spam por flapping)
 
 **Archivos del monitor:**
 | Archivo | Funcion |
@@ -588,14 +682,62 @@ Flujo mejorado de vinculacion Telegram → CRM:
 | `src/bot/handlers/registration.py` | ConversationHandler 3 estados: nombre→zona→confirmar |
 | `src/bot/keyboards.py` | `zone_selection()` teclado inline 12 zonas |
 
-### Estado del bot (2026-02-25)
+### Sistema de Diagnostico Automatico 3 Niveles (implementado 2026-02-28)
+Cuando un cliente reporta un problema de conexion, el bot ejecuta diagnostico automatico ANTES de llamar a Claude AI:
+
+**Flujo:**
+```
+Mensaje → Pre-filtro → Rate limit → Incidente/Maint → Intent detection
+  → Si es problema conexion: DiagnosticEngine.diagnose()
+    → Severidad critical/high → Respuesta automatica ($0)
+    → Severidad medium/none → Pasa diagnostico a Claude como contexto (~$0.02)
+  → Si NO es problema conexion: Directo a Claude AI (comportamiento anterior)
+```
+
+**DiagnosticEngine pasos (asyncio.gather para 3+4):**
+1. CRM: servicio → plan, status, unmsClientSiteId
+2. UISP NMS: find_device_by_site_id → nombre, modelo, status, signal, IP
+3. MikroTik: PPPoE session por IP → username, uptime, profile
+4. MikroTik: ping IP (3 paquetes) → success, avg_ms, loss
+5. DB: incidentes/mantenimiento activos en zona
+6. Clasificacion severidad
+
+**Arbol de clasificacion:**
+| Condicion | Severidad | Auto-responde? |
+|-----------|-----------|----------------|
+| Incidente/mantenimiento zona | critical | Si — "Interrupcion detectada..." |
+| Servicio suspendido | critical | Si — "Tu servicio esta suspendido..." |
+| Antena offline + sin PPPoE | high | Si — "Tu antena esta desconectada..." |
+| Antena online + sin PPPoE | high | Si — "Antena encendida pero sin conexion..." |
+| PPPoE activo + ping falla | high | Si — "Problemas de comunicacion..." |
+| Senal < -80 dBm | medium | No → Claude con contexto |
+| Latencia > 100ms | medium | No → Claude con contexto |
+| Packet loss > 0% | medium | No → Claude con contexto |
+| Todo OK | none | No → Claude con contexto |
+
+**Intent detection keywords** (`_is_connection_problem`): lento, no jala, sin internet, no conecta, se cae, falla, señal, antena, no tengo internet, etc.
+
+**Archivos:**
+| Archivo | Funcion |
+|---------|---------|
+| `src/diagnostics/engine.py` | DiagnosticResult dataclass + DiagnosticEngine |
+| `src/diagnostics/auto_responder.py` | auto_respond() + format_diagnostic_context() |
+| `src/bot/handlers/conversation.py` | Capa 2.7: intent detection + engine call |
+
+**Refactors:**
+- `/miconexion` y `/reportar` en customer.py ahora usan DiagnosticEngine (eliminada logica duplicada)
+- `tool_executor.py` corregido: usa find_device_by_site_id (antes usaba get_device con site ID → 404)
+- `mikrotik.py` ping fix: librouteros 4.0 requiere `path("/ping")("", **params)` (no `path("/ping", **params)`)
+- `uisp_nms.py`: nuevo metodo find_device_by_site_id() busca en cache por identification.site.id
+
+### Estado del bot (2026-02-28)
 - ✅ Desplegado en VPS (217.216.85.65) con Docker
 - ✅ Bot renombrado a "AURA" en BotFather (@auralinkmonitor_bot)
 - ✅ Botones inline funcionando
 - ✅ Claude AI responde con datos reales de UISP y MikroTik
 - ✅ Consulta de saldos, dispositivos offline, sesiones PPPoE
 - ✅ Pre-filtro y rate limiting implementados
-- ✅ Monitor de red corriendo (interval=120s, 25 zonas, 174 endpoints, 17 infra tracked)
+- ✅ Monitor de red corriendo (interval=120s, 25 zonas, 175 endpoints, 18 infra tracked)
 - ✅ Comandos /zonas, /incidentes, /monitor, /mantenimiento funcionando
 - ✅ Signup autoservicio con ID de servicio y seleccion de zona + fallback soporte humano
 - ✅ Clientes ya vinculados excluidos de registro (evita duplicados)
@@ -605,7 +747,8 @@ Flujo mejorado de vinculacion Telegram → CRM:
 - ✅ /cambiarplan: cliente solicita, admin aprueba, aplica dia 1 del mes siguiente (2026-02-25)
 - ✅ /registrados: cruce PPPoE vs registros en tiempo real (2026-02-25)
 - ✅ Aviso scheduler: re-publica cada 3 dias, transiciona modos, auto-excluye registrados
-- ✅ 6 bugs corregidos: monitor device_id, payment crm_payment_id, next_month x2, filter dup, PPPoE matching
+- ✅ Diagnostico automatico Tier 1: responde problemas claros $0, pasa contexto a Claude para ambiguos (2026-02-28)
+- ✅ Ping MikroTik corregido (librouteros 4.0 API change) + find_device_by_site_id (2026-02-28)
 - ⚠️ Pendiente: Haiku da error 529 (overloaded), usando Sonnet por ahora
 
 ### Sistema de Cobranza Automatizada (implementado 2026-02-16)
@@ -794,6 +937,9 @@ Cuando un cliente no puede vincular su cuenta (sin matches o selecciona "Ninguno
 | 4 | Condicion duplicada en filter (`"mi "` x2) | `filter.py` | `"mi "` + `"mis "` |
 | 5 | Dead code `next_month` en billing_admin | `billing_admin.py` | Misma correccion que #2 |
 | 6 | Monitor siempre 0 devices — `device.get("id")` es None, ID esta en `identification.id` | `monitor.py` | `device.get("identification", {}).get("id")` |
+| 7 | `nms.get_device(unmsClientSiteId)` retornaba 404 — unmsClientSiteId es site ID no device ID | `tool_executor.py`, `engine.py` | Nuevo `nms.find_device_by_site_id()` busca en cache por identification.site.id |
+| 8 | MikroTik ping roto — `api.path("/ping", **params)` no funciona en librouteros 4.0 | `mikrotik.py` | Cambiado a `api.path("/ping")("", **params)` |
+| 9 | Ping time parsing — formato `19ms285us` no `19ms` | `mikrotik.py` | Split en "ms" para extraer parte entera |
 
 ### Portal de Morosos / Captive Portal (implementado 2026-02-17)
 Cuando un cliente es suspendido, al intentar navegar ve una página de aviso en lugar de internet.
@@ -946,11 +1092,11 @@ Cuando un cliente es suspendido, al intentar navegar ve una página de aviso en 
 | WAN3 (Presidencia40) | WAN3-Download | 60M | Deshabilitado (WAN caida) |
 | WAN4 (Presidencia169) | WAN4-Download | 60M | Deshabilitado (WAN caida) |
 | WAN5 (StarlinkMini) | WAN5-Download | 180M | OK |
-| WAN6 (StarlinkTotin) | WAN6-Download | 180M | OK |
+| WAN6 (StarlinkTotin) | WAN6-Download | 180M | Deshabilitado (ISP Force200 issues, 2026-02-27) |
 | WAN7 (Chuy1) | WAN7-Download | 90M | Ajustado (era 40M) |
 | WAN8 (Chuy2) | WAN8-Download | 90M | Ajustado (era 40M) |
 | WAN9 (StarlinkAurora) | WAN9-Download | 180M | OK |
-| WAN10 (Chaviton) | WAN10 | 100M | OK |
+| WAN10 (Chaviton) | WAN10 | 80M | OK (macvlan, era 100M, ISP 100M down/30M up) |
 
 ### PPP Profiles (actualizado 2026-02-17)
 
@@ -1063,7 +1209,7 @@ Ver detalle en Problema Resuelto #10.
 - [x] ZeroTier route para UISP VPS — 217.216.85.65/32 via 10.147.17.92 + mangle Skip-PCC-for-UISP-VPS
 - [x] 35 antenas desconectadas UISP — recuperadas 100% via ZeroTier route + udapi-bridge restart
 - [x] Bug connection string UISP — corregido allowSelfSignedCertificate en 4 archivos (api.js, device-ws.js, unms-key.js, frontend)
-- [ ] Verificar connection string flag tras actualizaciones UISP — cambios dentro del contenedor se pierden
+- [x] Verificar connection string flag tras actualizaciones UISP — re-aplicado en update v3.0.159 (2026-03-01), frontend cambió a `index-9_kxL8KA.js`
 - [x] CRM limpieza — user eliminó 21 no-clientes (262→241 servicios)
 - [x] 42 phantoms UISP eliminados — segunda ronda limpieza BD (total acumulado: 146)
 - [x] 7 antenas decryption fix — 6/7 reseteadas a master key, 3 nuevas en UISP (+hugomanzot, veronicatenoriot, dianacornejoc)
@@ -1088,6 +1234,25 @@ Ver detalle en Problema Resuelto #10.
 - [x] Avisos: "Lo haré después" → 24h — dismiss_temp ahora agrega a avisos-visto con timeout=24h (era 5 min) (2026-02-26)
 - [x] Avisos: populate-avisos corregido — ahora limpia de avisos a los que ya están en avisos-visto por address (2026-02-26)
 - [x] /progreso sync — ahora sincroniza CRM antes de mostrar datos + lista de registrados con nombres y fechas (2026-02-26)
+- [x] 10.1.1.212 + 10.1.1.229 — device-specific key huérfana causaba RPC timeout, reseteadas a master key, ambas conectadas (2026-02-26)
+- [x] Auto-dismiss avisos fix — reescrito matching: usa IP del CRM en vez de nombre, fallback a find_secret_by_name() (2026-02-26)
+- [x] WAN10 Chaviton configurada — macvlan bajo ether8-WAN, IP fija 192.168.102.10/24, PCC :6/2, CAKE 80M, netwatch 8.8.8.8 (2026-02-27)
+- [x] WAN6 StarlinkTotin deshabilitada — ISP Force200 issues, user desconectó (2026-02-27)
+- [x] WAN9 StarlinkAurora re-habilitada — netwatch la deshabilitó por false-down (8.8.8.8 via CGNAT), cambiado a monitorear 100.64.0.1 (2026-02-27)
+- [x] QUIC bloqueado — UDP 443 drop en forward chain, fuerza TCP para QoS SNI (96% tráfico video/social usaba QUIC) (2026-02-27)
+- [x] QoS SNI wildcards corregidos — `*keyword*` formato en RouterOS 7 (no `*.domain.com`) en 7 reglas (2026-02-27)
+- [ ] WAN11 pendiente — macvlan bajo ether8-WAN (192.168.104.10/24), gateway no responde, ISP debe activar
+- [ ] Cambium Force 200 AP — enlace caído, user revisará físicamente el AP
+- [x] MikroTik scripts cleanup — 10 scripts + 12 schedulers obsoletos eliminados (2026-02-28)
+- [x] MikroTik backup diario restaurado — scheduler backup-diario-schedule 3AM + VPS pull 4:30AM (2026-02-28)
+- [x] Admin portal backups — pestaña Backups multi-dispositivo con agrupación mes→día (2026-02-28)
+- [x] Diagnostico automatico Tier 1 — DiagnosticEngine + auto_responder, responde problemas claros $0, pasa contexto a Claude (2026-02-28)
+- [x] MikroTik ping fix — librouteros 4.0 requiere path("/ping")("", **params), time parsing "19ms285us" (2026-02-28)
+- [x] find_device_by_site_id — unmsClientSiteId es site ID no device ID, nuevo metodo en uisp_nms.py (2026-02-28)
+- [x] /miconexion y /reportar refactorizados — usan DiagnosticEngine en vez de logica inline duplicada (2026-02-28)
+- [x] Avisos solo para aurora — desactivado populate-avisos scheduler, limpiada address-list, solo aurora (10.10.0.254) para pruebas (2026-03-01)
+- [x] 10.1.1.229 Sectorial Cumbre CPU fix — airview.status=disabled, CPU idle 7%→50%, UISP conexión estable (2026-03-01)
+- [x] Monitor anti-spam clientes — anti-flap 3 polls, cooldown por device_id, recovery solo >10 min (2026-03-01)
 
 ## Planes de servicio (UISP CRM)
 
@@ -1112,28 +1277,32 @@ Solo los 4 planes principales reciben avisos automaticos de cobranza y suspensio
 
 Estos datos se envian automaticamente en los recordatorios (dia 3), advertencia (dia 7) y aviso de suspension (dia 8).
 
-## Estado Actual (2026-02-26)
-- **204 dispositivos autorizados** en UISP: **201 conectados**, 3 desconectados
+## Estado Actual (2026-03-01)
+- **210 dispositivos** en UISP: **194 conectados**, 16 desconectados (14 client + 2 unauthorized)
 - **240 CRM clientes / 241 servicios** — 222 enlazados 1:1 a NMS endpoints (19 sin enlace)
 - **254 PPPoE secrets** (~199 sesiones activas), clienteprueba deshabilitado, pool 506 IPs
-- **MikroTik**: PCC src-address:**6** en **6 WANs activas** (WAN2 deshabilitada <10Mbps + WAN10 deshabilitada), fasttrack OFF, QoS CAKE funcional, 0 drops
-- **WANs activas**: WAN1 (Starlink2), WAN5 (StarlinkMini), WAN6 (StarlinkTotin), WAN7 (Chuy1), WAN8 (Chuy2), WAN9 (StarlinkAurora) — throughput total ~189 Mbps
+- **MikroTik**: PCC src-address:**6** en **6 WANs activas**, fasttrack OFF, QoS CAKE funcional, QUIC bloqueado, SNI wildcards corregidos
+- **WANs activas**: WAN1 (Starlink2, :6/0), WAN5 (StarlinkMini, :6/1), WAN10 (Chaviton macvlan, :6/2), WAN7 (Chuy1, :6/3), WAN8 (Chuy2, :6/4), WAN9 (StarlinkAurora, :6/5)
+- **WANs deshabilitadas**: WAN2 (Sergio <10Mbps), WAN3/WAN4 (Presidencia), WAN6 (StarlinkTotin — ISP Force200 issues)
+- **WAN11 pendiente**: macvlan bajo ether8-WAN (192.168.104.10/24), ISP no activo — necesita slot :6/x cuando se active (requiere recalcular a :7)
 - **UISP VPS routing**: Todo tráfico de antenas al VPS va por ZeroTier (mangle Skip-PCC + ruta estática 217.216.85.65/32 via 10.147.17.92)
 - **Connection string UISP**: Flag `allowUntrustedCertificate` corregido en 4 archivos del contenedor unms-api
 - **ucrm CPU limitado**: `docker update --cpus=2 ucrm` aplicado para evitar spikes que desconectan antenas (se pierde al actualizar UISP)
-- **Aura Bot "AURA"** en produccion en VPS con Docker — avisos portal + cambio plan + soporte humano + registrados
-- **Avisos Portal**: Modo **soft** activo, 188 clientes ven aviso, 5 registrados auto-excluidos. Scheduler re-publica cada 3 dias.
+- **Aura Bot "AURA"** en produccion en VPS con Docker — diagnostico automatico + avisos portal + cambio plan + soporte humano
+- **Diagnostico Tier 1**: problemas claros (antena off, suspendido, sin PPPoE) → respuesta automatica $0. Ambiguos (lento, señal baja) → pasa contexto pre-ejecutado a Claude (~$0.02, sin re-ejecutar tools)
+- **Avisos Portal**: NAT activa, solo `aurora` (10.10.0.254) en address-list `avisos` para pruebas. Scheduler `populate-avisos` desactivado. Re-activar cuando pruebas exitosas.
 - **Aviso scheduler**: Transiciones automaticas: soft (→Mar14) → medium (→Mar27) → strict (→Mar31) → off (Abr1)
 - **Avisos dismiss mejorado**: Registrados se excluyen inmediatamente al vincular. "Lo haré después" da 24h de gracia (no 5 min). Script populate-avisos limpia registrados en cada ejecución.
 - **Cambio de plan**: /cambiarplan disponible para clientes, admin aprueba, aplica dia 1 del mes siguiente
-- **Monitor de red** corriendo: 25 zonas, 174 endpoints, 18 infra tracked, polling cada 2 min
+- **Monitor de red** corriendo: 25 zonas, 175 endpoints, 18 infra tracked, polling cada 2 min, anti-flap 3 polls, cooldown clientes por device_id, recovery solo >10 min
 - **Sistema de cobranza** activo: BILLING_START_MONTH=2026-04, listo para abril
-- **Sistema de onboarding**: /sinvincular, /progreso (con sync + lista registrados), /mensaje — 5 clientes vinculados
+- **Sistema de onboarding**: /sinvincular, /progreso (con sync + lista registrados), /mensaje — 8 clientes vinculados
 - **Portal morosos** operativo: HTTP + HTTPS redirect, sync-morosos cada 1 min, Telegram permitido
-- **Backups automatizados**: MikroTik + Aura DB a VPS diario (cron 4:30/4:35 AM), retencion 14 dias
+- **Admin portal** en produccion: https://server.auralink.link:8092 — 7 pestañas (Dashboard, Clientes, Mensajes, Finanzas, Registros, Soporte, Backups)
+- **Backups automatizados**: MikroTik backup-diario (3AM) + VPS pull SCP (cron 4:30/4:35 AM), retencion 14 dias, descargables desde admin-portal pestaña Backups
 - **Enlace PtP Colmenares**: bajado a 40MHz + firmware XC.v8.7.19 (80MHz causaba CPU 100% en Rocket 5AC Lite). Pendiente reemplazar dishes airMAX por AC compatibles
 - **172.168.x.x restaurado**: re-agregado a local-networks (fix temporal hasta migrar a RFC1918)
 - **~23 antenas sin UISP**: tienen PPPoE pero credenciales SSH desconocidas, requieren acceso fisico
 - **Decryption errors**: reducidos ~90% (165/hr → ~34/5min), 6 MACs restantes no fixeables remotamente
-- **Prioridad**: vincular clientes a Telegram antes de abril (5 vinculados, aviso captive portal activo)
-- **UISP update disponible**: 3.0.151 → 3.0.159, programado para horario nocturno (revalidar connection string flag + reapply ucrm CPU limit)
+- **Prioridad**: vincular clientes a Telegram antes de abril (8 vinculados, aviso captive portal activo)
+- **UISP v3.0.159**: Actualizado 2026-03-01 (era v3.0.151). CRM v4.5.33. Connection string flag + ucrm CPU limit re-aplicados post-update. API v2.1 ya no acepta params `count`/`page`/`pageSize` en GET /devices.

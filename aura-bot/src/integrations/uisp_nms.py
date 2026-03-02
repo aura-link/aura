@@ -56,6 +56,16 @@ class UispNmsClient(BaseClient):
                 return d
         return None
 
+    async def find_device_by_site_id(self, site_id: str) -> dict | None:
+        """Busca el primer dispositivo que pertenece a un sitio NMS."""
+        devices = await self.get_devices()
+        for d in devices:
+            ident = d.get("identification") or {}
+            site = ident.get("site") or {}
+            if site.get("id") == site_id:
+                return d
+        return None
+
     async def get_devices_fresh(self) -> list[dict]:
         """Obtiene dispositivos sin cache (para monitor)."""
         data = await self.get("/devices")
@@ -81,7 +91,11 @@ class UispNmsClient(BaseClient):
 
     async def get_outages(self, count: int = 20) -> list[dict]:
         data = await self.get("/outages", params={"count": count, "page": 1})
-        return data if isinstance(data, list) else []
+        if isinstance(data, list):
+            return data
+        if isinstance(data, dict) and "items" in data:
+            return data["items"]
+        return []
 
     async def get_active_outages(self) -> list[dict]:
         outages = await self.get_outages(count=50)

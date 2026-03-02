@@ -70,24 +70,36 @@ def _generate_service_id(zone_abbr: str, client_id: str | int) -> str:
     return f"{zone_abbr}-{client_id}"
 
 
-async def _dismiss_from_avisos(mk, client_name: str):
+async def _dismiss_from_avisos(mk, client_name: str, device_ip: str = ""):
     """Remove registered client from avisos captive portal immediately.
 
-    Finds their PPPoE session IP, removes from avisos list, adds to avisos-visto.
+    Uses device_ip from CRM (most reliable), falls back to PPPoE name matching.
     """
-    # Find active PPPoE session
     sessions = await mk.get_active_sessions()
     client_ip = None
     ppp_name = None
-    name_lower = client_name.lower().replace(" ", "")
-    for s in sessions:
-        sname = (s.get("name") or "").lower().replace(" ", "")
-        if sname and (name_lower in sname or sname in name_lower):
-            client_ip = s.get("address")
-            ppp_name = s.get("name")
-            break
+
+    # 1. Match by device IP from CRM (most reliable)
+    if device_ip:
+        for s in sessions:
+            if s.get("address") == device_ip:
+                client_ip = device_ip
+                ppp_name = s.get("name")
+                break
+
+    # 2. Fallback: match by PPPoE secret name using find_secret_by_name
+    if not client_ip:
+        secret = await mk.find_secret_by_name(client_name)
+        if secret:
+            secret_name = secret.get("name", "")
+            for s in sessions:
+                if (s.get("name") or "").lower() == secret_name.lower():
+                    client_ip = s.get("address")
+                    ppp_name = s.get("name")
+                    break
 
     if not client_ip:
+        log.warning("Could not find PPPoE session for dismiss: %s (device_ip=%s)", client_name, device_ip)
         return
 
     # Remove from avisos + add to avisos-visto via MikroTik API
@@ -434,7 +446,14 @@ async def handle_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     mk = context.bot_data.get("mikrotik")
     if mk:
         try:
-            await _dismiss_from_avisos(mk, client_name)
+            # Get device IP from reg_matches if available
+            device_ip = ""
+            matches = context.user_data.get("reg_matches", [])
+            for m in matches:
+                if str(m.get("client_id")) == str(client_id):
+                    device_ip = m.get("ip", "")
+                    break
+            await _dismiss_from_avisos(mk, client_name, device_ip=device_ip)
         except Exception as e:
             log.warning("Could not auto-dismiss avisos for %s: %s", client_name, e)
 

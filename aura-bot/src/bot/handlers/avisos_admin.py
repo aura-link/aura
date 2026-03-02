@@ -1,13 +1,15 @@
 """Handler /aviso: crear, previsualizar y publicar avisos en el portal captive.
 
-Supports phased rollout with 3 modes:
-- soft: aviso shows, verifies, but always gives internet (Feb 25 - Mar 14)
-- medium: verify strict + temp dismiss available (Mar 15 - Mar 27)
-- strict: must register to browse (Mar 28 - Mar 31)
+Supports phased rollout with 4 modes:
+- soft: aviso shows, verifies, but always gives internet (Mar 1 - Mar 15)
+- medium: verify strict + temp dismiss available (Mar 16 - Mar 25)
+- strict: 5min temp dismiss for unregistered (Mar 26 - Mar 31)
+- persistent: same as strict, indefinite (Apr 1+)
 """
 
 import asyncio
 import json
+import os
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -21,13 +23,14 @@ from src import config
 
 TZ = ZoneInfo("America/Mexico_City")
 
-# Aviso schedule: mode transitions by date (month, day)
+# Aviso schedule: mode transitions by date (month, day) — checked top-down, first match wins
 AVISO_MODE_SCHEDULE = [
-    ((3, 28), "strict"),   # Mar 28+ → strict
-    ((3, 15), "medium"),   # Mar 15-27 → medium
-    ((2, 25), "soft"),     # Feb 25 - Mar 14 → soft
+    ((4, 1),  "persistent"),  # Apr 1+ → persistent (indefinite)
+    ((3, 26), "strict"),      # Mar 26-31 → strict
+    ((3, 16), "medium"),      # Mar 16-25 → medium
+    ((3, 1),  "soft"),        # Mar 1-15 → soft
 ]
-AVISO_REPUBLISH_DAYS = 3  # Re-publish every 3 days in soft/medium modes
+AVISO_REPUBLISH_DAYS = 3  # Re-publish every 3 days
 
 AVISOS_URL = None  # lazy-loaded from config
 ADMIN_TOKEN = None
@@ -136,7 +139,12 @@ def _preview_text(data: dict) -> str:
         for i, s in enumerate(steps, 1):
             lines.append(f"  {i}. {s}")
     mode = data.get("mode", "normal")
-    mode_labels = {"soft": "Suave (internet siempre)", "medium": "Medio (verifica estricto)", "strict": "Estricto (debe registrarse)"}
+    mode_labels = {
+        "soft": "Suave (internet siempre)",
+        "medium": "Medio (verifica estricto)",
+        "strict": "Estricto (5 min sin registro)",
+        "persistent": "Permanente (5 min sin registro, indefinido)",
+    }
     mode_label = mode_labels.get(mode, "Normal")
     lines.extend(["", f"Datos bancarios: {bank} | Bot Telegram: {tg}", f"Modo: {mode_label}"])
     return "\n".join(lines)
@@ -408,15 +416,19 @@ async def _publish(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     mk = context.bot_data.get("mikrotik")
+    db = context.bot_data.get("db")
     clients_count = 0
+    dismissed = 0
 
     if mk:
         try:
-            # 2. Clear avisos-visto (so everyone sees the new announcement)
+            # 2. Clear both lists
             await mk.clear_address_list("avisos-visto")
-            # 3. Clear existing avisos list
             await mk.clear_address_list("avisos")
-            # 4. Run populate-avisos script (fills address-list from active PPPoE)
+            # 3. Auto-dismiss registered BEFORE populating (so they never enter avisos)
+            if db:
+                dismissed = await _auto_dismiss_registered(mk, db)
+            # 4. Run populate-avisos script (fills address-list, skips avisos-visto by address)
             await mk.run_script(SCRIPT_NAME)
             # 5. Enable NAT redirect rule
             await mk.set_nat_rule_disabled(NAT_COMMENT, disabled=False)
@@ -427,15 +439,6 @@ async def _publish(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             log.error("MikroTik publish error: %s", e)
 
-    # 8. Auto-dismiss registered clients (so they don't see aviso)
-    dismissed = 0
-    db = context.bot_data.get("db")
-    if mk and db:
-        try:
-            dismissed = await _auto_dismiss_registered(mk, db)
-        except Exception as e:
-            log.warning("Auto-dismiss error: %s", e)
-
     title = aviso.get("title", "?")
     mode = aviso.get("mode", "normal")
     msg = f"Aviso publicado: *{title}*"
@@ -445,20 +448,32 @@ async def _publish(update: Update, context: ContextTypes.DEFAULT_TYPE):
             msg += f"\n{dismissed} clientes registrados auto-excluidos."
     else:
         msg += "\n\nMikroTik no disponible o lista vacia — verifica manualmente."
-    if mode in ("soft", "medium", "strict"):
-        mode_labels = {"soft": "Suave", "medium": "Medio", "strict": "Estricto"}
+    if mode in ("soft", "medium", "strict", "persistent"):
+        mode_labels = {"soft": "Suave", "medium": "Medio", "strict": "Estricto", "persistent": "Permanente"}
         msg += f"\nModo: {mode_labels.get(mode, mode)}"
 
     await query.edit_message_text(msg, parse_mode="Markdown")
 
 
-async def _auto_dismiss_registered(mk, db) -> int:
-    """Add registered clients to avisos-visto so they skip the aviso."""
-    links = await db.get_all_customer_links()
-    if not links:
-        return 0
+EXCLUDED_PPP_NAMES = {
+    "martinpintort", "casacristinat", "cristinavillasenorcc", "mabilaliat",
+    "deportest", "diftomatlan", "javieraraizat", "lauracumbre", "marciat",
+    "oscarsunyt", "pelonc", "peloncoco", "tiagloria", "renecumbre",
+}
 
+
+def _names_match(ppp_name: str, crm_name: str) -> bool:
+    """Check if PPPoE username matches CRM name (both pre-normalized: lowercase, no spaces)."""
+    if not ppp_name or not crm_name:
+        return False
+    return crm_name == ppp_name or crm_name in ppp_name or ppp_name in crm_name
+
+
+async def _auto_dismiss_registered(mk, db) -> int:
+    """Add registered + excluded clients to avisos-visto and remove from avisos."""
+    links = await db.get_all_customer_links()
     sessions = await mk.get_active_sessions()
+
     linked_names = set()
     for link in links:
         name = (link.get("crm_client_name") or "").lower().replace(" ", "")
@@ -467,19 +482,30 @@ async def _auto_dismiss_registered(mk, db) -> int:
 
     dismissed = 0
     for session in sessions:
-        ppp_name = (session.get("name") or "").lower().replace(" ", "")
+        raw_name = session.get("name") or ""
+        ppp_name = raw_name.lower().replace(" ", "")
         if not ppp_name:
             continue
-        for linked in linked_names:
-            if linked == ppp_name or linked in ppp_name or ppp_name in linked:
-                ip = session.get("address")
-                if ip:
-                    ok = await mk.add_address_list_entry("avisos-visto", ip, session.get("name", ""))
-                    if ok:
-                        dismissed += 1
-                break
 
-    log.info("Auto-dismissed %d registered clients from avisos", dismissed)
+        should_dismiss = False
+        # Check excluded accounts
+        if ppp_name in EXCLUDED_PPP_NAMES:
+            should_dismiss = True
+        else:
+            # Check registered clients
+            for linked in linked_names:
+                if _names_match(ppp_name, linked):
+                    should_dismiss = True
+                    break
+
+        if should_dismiss:
+            ip = session.get("address")
+            if ip:
+                await mk.add_address_list_entry("avisos-visto", ip, raw_name)
+                await mk.remove_address_list_entry("avisos", ip)
+                dismissed += 1
+
+    log.info("Auto-dismissed %d registered/excluded clients from avisos", dismissed)
     return dismissed
 
 
@@ -495,16 +521,77 @@ def _get_current_mode() -> str:
 # --- Registration Aviso Template (reusable for scheduler) ---
 
 def _get_registro_aviso(mode: str) -> dict:
-    """Get the registration aviso template with the specified mode."""
-    return {
-        "title": "Nuevo Sistema de Atención AURALINK",
-        "icon": "\U0001f4f1",
-        "color_theme": "blue",
-        "body": "A partir de abril 2026, AURALINK gestionará tu cuenta a través de Telegram: consultas de saldo, reportes de pago, soporte técnico y avisos de servicio.\n\nEl registro está disponible durante el mes de marzo. Los clientes que no se registren antes del 31 de marzo no tendrán acceso a estos beneficios cuando el sistema entre en operación.",
-        "details": [
+    """Get the registration aviso template with the specified mode.
+
+    Each phase has a different body text:
+    - soft: informative, benefits-focused
+    - medium: urgency, deadline approaching
+    - strict: warning, days left
+    - persistent: mandatory, aviso every 5 min
+    """
+    # Phase-specific body texts
+    body_texts = {
+        "soft": (
+            "A partir de abril 2026, AURALINK gestionará tu cuenta a través de Telegram: "
+            "consultas de saldo, reportes de pago, soporte técnico y avisos de servicio.\n\n"
+            "El registro está disponible durante el mes de marzo. Los clientes que no se "
+            "registren antes del 31 de marzo no tendrán acceso a estos beneficios cuando "
+            "el sistema entre en operación."
+        ),
+        "medium": (
+            "El plazo de registro está por terminar. A partir de abril, los clientes no "
+            "registrados tendrán interrupciones en su navegación cada 5 minutos.\n\n"
+            "Regístrate ahora para evitar molestias."
+        ),
+        "strict": (
+            "Quedan pocos días para registrarte. A partir del 1 de abril, los clientes sin "
+            "registro verán este aviso cada 5 minutos al navegar.\n\n"
+            "Regístrate hoy para navegar sin interrupciones."
+        ),
+        "persistent": (
+            "El registro en Telegram es obligatorio para todos los clientes de AURALINK. "
+            "Este aviso aparecerá cada 5 minutos hasta que completes tu registro.\n\n"
+            "Tienes internet disponible para descargar Telegram y registrarte."
+        ),
+    }
+
+    # Phase-specific color themes
+    color_themes = {
+        "soft": "blue",
+        "medium": "orange",
+        "strict": "red",
+        "persistent": "red",
+    }
+
+    # Phase-specific details
+    details_map = {
+        "soft": [
             "Registro disponible: 1 al 31 de marzo 2026",
             "Inicio de operación: abril 2026",
         ],
+        "medium": [
+            "Fecha límite: 31 de marzo 2026",
+            "Después de abril: aviso cada 5 minutos sin registro",
+        ],
+        "strict": [
+            "Últimos días para registrarte sin interrupciones",
+        ],
+        "persistent": [
+            "Aviso cada 5 minutos hasta completar registro",
+        ],
+    }
+
+    contact_detail = "¿Necesitas ayuda? Llama al 5623655099 para asesoría en el registro"
+
+    details = details_map.get(mode, details_map["soft"])
+    details.append(contact_detail)
+
+    return {
+        "title": "Nuevo Sistema de Atención AURALINK",
+        "icon": "\U0001f4f1",
+        "color_theme": color_themes.get(mode, "blue"),
+        "body": body_texts.get(mode, body_texts["soft"]),
+        "details": details,
         "features": [
             {"icon": "\U0001f4b0", "text": "Consultar tu saldo y facturas"},
             {"icon": "\U0001f4e1", "text": "Ver el estado de tu servicio"},
@@ -539,19 +626,18 @@ async def _republish_aviso(mk, db, mode: str) -> dict:
     dismissed = 0
 
     if mk:
-        # 2. Clear avisos-visto (so unregistered see it again)
+        # 2. Clear both lists
         await mk.clear_address_list("avisos-visto")
-        # 3. Clear avisos
         await mk.clear_address_list("avisos")
-        # 4. Run populate-avisos script
+        # 3. Auto-dismiss registered BEFORE populating
+        if db:
+            dismissed = await _auto_dismiss_registered(mk, db)
+        # 4. Run populate-avisos script (skips avisos-visto by address)
         await mk.run_script(SCRIPT_NAME)
         # 5. Enable NAT + scheduler
         await mk.set_nat_rule_disabled(NAT_COMMENT, disabled=False)
         await mk.set_scheduler_disabled(SCHEDULER_NAME, disabled=False)
-        # 6. Auto-dismiss registered clients
-        if db:
-            dismissed = await _auto_dismiss_registered(mk, db)
-        # 7. Count remaining
+        # 6. Count remaining
         clients_count = await mk.get_address_list_count("avisos")
 
     return {
@@ -567,12 +653,18 @@ async def aviso_scheduler_loop(bot_data: dict):
     """Background task: re-publishes registration aviso every 3 days and transitions modes.
 
     Schedule:
-    - Feb 25 - Mar 14: soft mode, re-publish every 3 days
-    - Mar 15 - Mar 27: medium mode, re-publish every 3 days
-    - Mar 28 - Mar 31: strict mode (no re-publish needed, stays strict)
-    - Apr 1+: auto-deactivate
+    - Mar 1 - Mar 15: soft mode, re-publish every 3 days
+    - Mar 16 - Mar 25: medium mode, re-publish every 3 days
+    - Mar 26 - Mar 31: strict mode, re-publish every 3 days
+    - Apr 1+: persistent mode, re-publish every 3 days (indefinite)
     """
     await asyncio.sleep(30)  # let bot finish init
+
+    # Disabled until ready for full rollout (testing with aurora only)
+    if not os.getenv("AVISO_SCHEDULER_ENABLED", "").lower() in ("true", "1", "yes"):
+        log.info("Aviso scheduler DISABLED (set AVISO_SCHEDULER_ENABLED=true to enable)")
+        return
+
     log.info("Aviso scheduler started")
 
     while True:
@@ -581,27 +673,17 @@ async def aviso_scheduler_loop(bot_data: dict):
             mk = bot_data.get("mikrotik")
             db = bot_data.get("db")
 
-            # After March → deactivate
-            if now.month >= 4:
-                log.info("Aviso scheduler: April reached, deactivating")
-                await _portal_request("POST", "/api/admin/deactivate")
-                if mk:
-                    try:
-                        await mk.set_nat_rule_disabled(NAT_COMMENT, disabled=True)
-                        await mk.set_scheduler_disabled(SCHEDULER_NAME, disabled=True)
-                    except Exception:
-                        pass
-                break
-
             # Before Feb 25 → do nothing
             if now.month < 2 or (now.month == 2 and now.day < 25):
                 await asyncio.sleep(3600)
                 continue
 
-            # Check if aviso is active
-            aviso_state = bot_data.get("aviso_scheduler_state", {})
-            last_publish = aviso_state.get("last_publish_date", "")
-            last_mode = aviso_state.get("last_mode", "")
+            # Check scheduler state from persistent DB
+            last_publish = ""
+            last_mode = ""
+            if db:
+                last_publish = await db.get_setting("aviso_last_publish_date") or ""
+                last_mode = await db.get_setting("aviso_last_mode") or ""
             today_str = now.strftime("%Y-%m-%d")
             current_mode = _get_current_mode()
 
@@ -612,8 +694,8 @@ async def aviso_scheduler_loop(bot_data: dict):
                 log.info("Aviso mode transition: %s → %s", last_mode, current_mode)
                 should_republish = True
 
-            # 3 days since last publish → re-publish (soft/medium only)
-            elif current_mode in ("soft", "medium"):
+            # 3 days since last publish → re-publish (all modes including persistent)
+            elif current_mode in ("soft", "medium", "strict", "persistent"):
                 if not last_publish:
                     should_republish = True
                 else:
@@ -630,10 +712,9 @@ async def aviso_scheduler_loop(bot_data: dict):
                 try:
                     result = await _republish_aviso(mk, db, current_mode)
                     if result.get("ok"):
-                        bot_data["aviso_scheduler_state"] = {
-                            "last_publish_date": today_str,
-                            "last_mode": current_mode,
-                        }
+                        if db:
+                            await db.set_setting("aviso_last_publish_date", today_str)
+                            await db.set_setting("aviso_last_mode", current_mode)
                         log.info("Aviso re-published: mode=%s, clients=%d, dismissed=%d",
                                  current_mode, result.get("clients", 0), result.get("dismissed", 0))
 
@@ -642,7 +723,7 @@ async def aviso_scheduler_loop(bot_data: dict):
                             try:
                                 bot = bot_data.get("_bot")
                                 if bot:
-                                    mode_labels = {"soft": "Suave", "medium": "Medio", "strict": "Estricto"}
+                                    mode_labels = {"soft": "Suave", "medium": "Medio", "strict": "Estricto", "persistent": "Permanente"}
                                     await bot.send_message(
                                         chat_id=admin_id,
                                         text=(

@@ -76,17 +76,15 @@ class MikroTikClient:
         def _ping():
             api = self._connect()
             try:
-                params = {
+                ping_path = api.path("/ping")
+                results = list(ping_path("", **{
                     "address": address,
                     "count": str(count),
-                }
-                results = list(api.path("/ping", **params))
+                }))
 
                 if not results:
                     return {"success": False, "sent": count, "received": 0, "lost": count}
 
-                # librouteros returns intermediate results + summary
-                # The last entry usually has the summary
                 received = 0
                 total_rtt = 0
                 rtt_count = 0
@@ -96,9 +94,13 @@ class MikroTikClient:
                     if "time" in r:
                         received += 1
                         try:
-                            # time can be like "1ms" or just a number
-                            t = str(r["time"]).replace("ms", "").strip()
-                            total_rtt += int(t)
+                            # time format: "19ms285us" or "3ms127us"
+                            t = str(r["time"])
+                            if "ms" in t:
+                                ms_part = t.split("ms")[0]
+                                total_rtt += int(ms_part)
+                            else:
+                                total_rtt += int(t)
                             rtt_count += 1
                         except (ValueError, TypeError):
                             pass
@@ -355,6 +357,26 @@ class MikroTikClient:
                 api.close()
 
         return await self._run(_add)
+
+    async def remove_address_list_entry(self, list_name: str, address: str) -> bool:
+        """Remove an entry from a firewall address-list by address."""
+        def _remove():
+            api = self._connect()
+            try:
+                entries = list(api.path("/ip/firewall/address-list"))
+                for e in entries:
+                    e = dict(e)
+                    if e.get("list") == list_name and e.get("address") == address:
+                        api.path("/ip/firewall/address-list").remove(e[".id"])
+                        return True
+                return False
+            except Exception as exc:
+                log.warning("remove_address_list_entry(%s, %s) error: %s", list_name, address, exc)
+                return False
+            finally:
+                api.close()
+
+        return await self._run(_remove)
 
     async def disconnect_session(self, secret_name: str) -> bool:
         """Disconnect active PPPoE session by secret name so client reconnects with new profile."""

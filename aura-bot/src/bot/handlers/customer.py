@@ -3,6 +3,7 @@
 from telegram import Update
 from telegram.ext import ContextTypes
 from src.utils.formatting import format_mxn, format_signal, format_speed, format_datetime, status_emoji
+from src.diagnostics.engine import DiagnosticResult
 from src.utils.logger import log
 
 
@@ -104,71 +105,49 @@ async def miconexion_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     await msg.reply_text("🔍 Analizando tu conexion...")
 
-    crm = context.bot_data["uisp_crm"]
-    nms = context.bot_data["uisp_nms"]
-    mk = context.bot_data.get("mikrotik")
+    engine = context.bot_data.get("diagnostic_engine")
+    if not engine:
+        await msg.reply_text("⚠️ Diagnostico no disponible. Usa /soporte.")
+        return
 
-    text = f"📶 *Conexion de {link['crm_client_name']}*\n\n"
-
-    # Get services to find device
-    services = await crm.get_client_services(link["crm_client_id"])
-    device_found = False
-
-    for svc in services:
-        # Try to find associated device IP
-        svc_detail = await crm.get_service(str(svc.get("id", "")))
-        if not svc_detail:
-            continue
-
-        # UISP CRM services may have device info
-        unms_device_id = svc_detail.get("unmsClientSiteId")
-        if unms_device_id:
-            device = await nms.get_device(unms_device_id)
-            if device:
-                device_found = True
-                overview = device.get("overview", {}) or {}
-                ident = device.get("identification", {}) or {}
-                text += f"📡 *Antena: {ident.get('name', 'N/A')}*\n"
-                text += f"  Modelo: {ident.get('model', 'N/A')}\n"
-                text += f"  Estado: {status_emoji(overview.get('status'))} {overview.get('status', 'N/A')}\n"
-
-                signal = overview.get("signal")
-                if signal:
-                    text += f"  Señal: {format_signal(signal)}\n"
-
-                ip = (device.get("ipAddress") or "").split("/")[0]
-                if ip:
-                    text += f"  IP: {ip}\n"
-
-                    # PPPoE from MikroTik
-                    if mk:
-                        try:
-                            session = await mk.find_session_by_ip(ip)
-                            if session:
-                                text += f"\n📊 *PPPoE:*\n"
-                                text += f"  Usuario: {session.get('name', 'N/A')}\n"
-                                text += f"  Uptime: {session.get('uptime', 'N/A')}\n"
-                                text += f"  MAC: {session.get('caller-id', 'N/A')}\n"
-                            else:
-                                text += "\n⚠️ Sin sesion PPPoE activa\n"
-                        except Exception as e:
-                            log.warning("MikroTik error: %s", e)
-
-                    # Ping from MikroTik
-                    if mk and ip:
-                        try:
-                            ping = await mk.ping(ip, count=3)
-                            if ping.get("success"):
-                                text += f"\n🏓 *Ping:* {ping.get('avg_rtt', 'N/A')} ms ({ping.get('received', 0)}/{ping.get('sent', 0)})\n"
-                            else:
-                                text += "\n🏓 *Ping:* Sin respuesta ❌\n"
-                        except Exception as e:
-                            log.warning("Ping error: %s", e)
-
-    if not device_found:
-        text += "⚠️ No se encontro dispositivo asociado a tu servicio.\nContacta a soporte si tienes problemas."
-
+    diag = await engine.diagnose(link["crm_client_id"], link["crm_client_name"])
+    text = _format_miconexion(diag)
     await msg.reply_text(text, parse_mode="Markdown")
+
+
+def _format_miconexion(d: DiagnosticResult) -> str:
+    """Formatea DiagnosticResult para /miconexion (vista detallada)."""
+    text = f"📶 *Conexion de {d.client_name}*\n\n"
+
+    if not d.device_found:
+        text += "⚠️ No se encontro dispositivo asociado a tu servicio.\nContacta a soporte si tienes problemas."
+        return text
+
+    text += f"📡 *Antena: {d.device_name or 'N/A'}*\n"
+    text += f"  Modelo: {d.device_model or 'N/A'}\n"
+    text += f"  Estado: {status_emoji(d.device_status)} {d.device_status}\n"
+
+    if d.signal_dbm is not None:
+        text += f"  Señal: {format_signal(d.signal_dbm)}\n"
+
+    if d.device_ip:
+        text += f"  IP: {d.device_ip}\n"
+
+    if d.pppoe_active:
+        text += f"\n📊 *PPPoE:*\n"
+        text += f"  Usuario: {d.pppoe_username or 'N/A'}\n"
+        text += f"  Uptime: {d.pppoe_uptime or 'N/A'}\n"
+        text += f"  MAC: {d.pppoe_mac or 'N/A'}\n"
+    elif d.device_ip:
+        text += "\n⚠️ Sin sesion PPPoE activa\n"
+
+    if d.ping_sent > 0:
+        if d.ping_success:
+            text += f"\n🏓 *Ping:* {d.ping_avg_ms or 'N/A'} ms ({d.ping_received}/{d.ping_sent})\n"
+        else:
+            text += "\n🏓 *Ping:* Sin respuesta\n"
+
+    return text
 
 
 async def reportar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -183,42 +162,14 @@ async def reportar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await msg.reply_text("🔧 Ejecutando diagnostico completo...")
 
-    # Run same diagnostic as miconexion
-    crm = context.bot_data["uisp_crm"]
-    nms = context.bot_data["uisp_nms"]
-    mk = context.bot_data.get("mikrotik")
+    engine = context.bot_data.get("diagnostic_engine")
+    if not engine:
+        await msg.reply_text("⚠️ Diagnostico no disponible. Usa /soporte.")
+        return
 
-    issues = []
+    diag = await engine.diagnose(link["crm_client_id"], link["crm_client_name"])
 
-    services = await crm.get_client_services(link["crm_client_id"])
-    for svc in services:
-        svc_detail = await crm.get_service(str(svc.get("id", "")))
-        if not svc_detail:
-            continue
-
-        unms_device_id = svc_detail.get("unmsClientSiteId")
-        if unms_device_id:
-            device = await nms.get_device(unms_device_id)
-            if device:
-                overview = device.get("overview", {}) or {}
-                status = (overview.get("status") or "").lower()
-                if status != "active":
-                    issues.append(f"Antena esta {status}")
-
-                signal = overview.get("signal")
-                if signal and int(signal) < -80:
-                    issues.append(f"Señal baja: {signal} dBm")
-
-                ip = (device.get("ipAddress") or "").split("/")[0]
-                if ip and mk:
-                    try:
-                        session = await mk.find_session_by_ip(ip)
-                        if not session:
-                            issues.append("Sin sesion PPPoE activa")
-                    except Exception:
-                        pass
-
-    if not issues:
+    if not diag.issues:
         await msg.reply_text(
             "✅ *Diagnostico completado*\n\n"
             "No se detectaron problemas con tu conexion.\n\n"
@@ -227,7 +178,7 @@ async def reportar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     else:
         text = "⚠️ *Diagnostico completado*\n\nProblemas detectados:\n"
-        for issue in issues:
+        for issue in diag.issues:
             text += f"  • {issue}\n"
         text += "\nUsa /soporte para escalar a un tecnico."
         await msg.reply_text(text, parse_mode="Markdown")

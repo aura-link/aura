@@ -182,6 +182,12 @@ class Database:
                 notes TEXT
             );
 
+            CREATE TABLE IF NOT EXISTS bot_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
             CREATE TABLE IF NOT EXISTS pending_plan_changes (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 crm_client_id TEXT NOT NULL,
@@ -824,3 +830,23 @@ class Database:
         )
         row = await cursor.fetchone()
         return dict(row) if row else None
+
+    # -- bot_settings --
+
+    async def get_setting(self, key: str) -> str | None:
+        """Get a bot setting value by key."""
+        cursor = await self.db.execute(
+            "SELECT value FROM bot_settings WHERE key = ?", (key,),
+        )
+        row = await cursor.fetchone()
+        return row[0] if row else None
+
+    async def set_setting(self, key: str, value: str):
+        """Set a bot setting value (upsert)."""
+        await self.db.execute(
+            """INSERT INTO bot_settings (key, value, updated_at)
+               VALUES (?, ?, CURRENT_TIMESTAMP)
+               ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=CURRENT_TIMESTAMP""",
+            (key, value),
+        )
+        await self.db.commit()

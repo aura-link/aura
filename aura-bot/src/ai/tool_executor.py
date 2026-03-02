@@ -73,11 +73,11 @@ class ToolExecutor:
             if not svc_detail:
                 continue
 
-            unms_device_id = svc_detail.get("unmsClientSiteId")
-            if not unms_device_id:
+            unms_site_id = svc_detail.get("unmsClientSiteId")
+            if not unms_site_id:
                 continue
 
-            device = await self.nms.get_device(unms_device_id)
+            device = await self.nms.find_device_by_site_id(unms_site_id)
             if not device:
                 continue
 

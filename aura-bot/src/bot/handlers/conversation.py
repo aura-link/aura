@@ -4,10 +4,27 @@ from telegram import Update
 from telegram.ext import ContextTypes
 from src.bot.roles import get_role, Role
 from src.utils.filter import is_relevant, REJECTION_MESSAGE
+from src.diagnostics.auto_responder import auto_respond, format_diagnostic_context
 from src.utils.logger import log
 
 # Limite de consultas AI por dia para clientes/guests
 DAILY_AI_LIMIT = 15
+
+# Keywords que indican problema de conexion
+_CONN_KW = {
+    "lento", "lenta", "no carga", "no abre", "no jala", "no sirve",
+    "sin internet", "sin señal", "sin conexion", "no conecta", "se cae",
+    "se desconecta", "intermitente", "inestable", "caida", "caido",
+    "falla", "fallo", "no funciona", "lag", "latencia", "ping",
+    "velocidad", "megas", "mbps", "señal", "antena", "reiniciar", "reboot",
+    "no tengo internet", "no hay internet", "me cae", "se me cae",
+    "no tengo señal", "no tengo conexion",
+}
+
+
+def _is_connection_problem(text: str) -> bool:
+    t = text.lower()
+    return any(kw in t for kw in _CONN_KW)
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -96,6 +113,26 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             log.info("Respuesta automatica por mantenimiento activo para user %d", user.id)
             return
 
+    # === CAPA 2.7: Diagnostico automatico Tier 1 (solo clientes vinculados, $0) ===
+    diagnostic_context = None
+    if link and role != Role.ADMIN and _is_connection_problem(text):
+        engine = context.bot_data.get("diagnostic_engine")
+        if engine:
+            await context.bot.send_chat_action(chat_id=message.chat_id, action="typing")
+            diag = await engine.diagnose(link["crm_client_id"], link["crm_client_name"])
+
+            response = auto_respond(diag)
+            if response:
+                log.info("Auto-diagnostic response for user %d (severity=%s)", user.id, diag.severity)
+                await message.reply_text(response, parse_mode="Markdown")
+                await db.add_message(user.id, "user", text)
+                await db.add_message(user.id, "assistant", response)
+                return
+
+            # No auto-response → pass diagnostic context to Claude
+            diagnostic_context = format_diagnostic_context(diag)
+            log.info("Diagnostic pre-loaded for user %d (severity=%s), passing to Claude", user.id, diag.severity)
+
     # === CAPA 3: Claude AI (con system prompt que refuerza el enfoque) ===
     role_str = role.value
     client_name = link["crm_client_name"] if link else None
@@ -127,6 +164,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         client_id=client_id,
         user_context=user_context,
         active_incidents=active_incidents if active_incidents else None,
+        diagnostic_context=diagnostic_context,
     )
 
     # Save to history

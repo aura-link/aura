@@ -4,6 +4,8 @@ services:
     container_name: aura-bot
     restart: unless-stopped
     env_file: .env
+    environment:
+      - TZ=America/Mexico_City
     volumes:
       - ./data:/app/data
     networks:

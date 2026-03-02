@@ -1,0 +1,863 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AURALINK Admin</title>
+<link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+:root { --bg: #0f172a; --sidebar: #1e293b; --card: #1e293b; --accent: #3b82f6; --accent2: #8b5cf6; --green: #22c55e; --red: #ef4444; --yellow: #eab308; --text: #e2e8f0; --muted: #94a3b8; }
+body { background: var(--bg); color: var(--text); font-family: 'Inter', system-ui, sans-serif; }
+.sidebar { background: var(--sidebar); width: 220px; min-height: 100vh; position: fixed; left: 0; top: 0; z-index: 50; transition: transform 0.2s; }
+.main { margin-left: 220px; padding: 24px; }
+.card { background: var(--card); border: 1px solid #334155; border-radius: 12px; padding: 20px; }
+.nav-item { padding: 10px 16px; border-radius: 8px; cursor: pointer; display: flex; align-items: center; gap: 10px; color: var(--muted); transition: all 0.15s; margin: 2px 8px; }
+.nav-item:hover, .nav-item.active { background: rgba(59,130,246,0.15); color: white; }
+.badge { display: inline-block; padding: 2px 8px; border-radius: 9999px; font-size: 11px; font-weight: 600; }
+.badge-green { background: rgba(34,197,94,0.2); color: #4ade80; }
+.badge-red { background: rgba(239,68,68,0.2); color: #f87171; }
+.badge-yellow { background: rgba(234,179,8,0.2); color: #facc15; }
+.badge-blue { background: rgba(59,130,246,0.2); color: #60a5fa; }
+.btn { padding: 8px 16px; border-radius: 8px; font-weight: 600; font-size: 14px; cursor: pointer; transition: all 0.15s; border: none; }
+.btn-primary { background: var(--accent); color: white; }
+.btn-primary:hover { background: #2563eb; }
+.btn-danger { background: var(--red); color: white; }
+.btn-secondary { background: #334155; color: var(--text); }
+.btn-secondary:hover { background: #475569; }
+input, select, textarea { background: #0f172a; border: 1px solid #334155; color: var(--text); border-radius: 8px; padding: 8px 12px; outline: none; }
+input:focus, select:focus, textarea:focus { border-color: var(--accent); }
+table { width: 100%; border-collapse: collapse; }
+th { text-align: left; padding: 10px 12px; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid #334155; }
+td { padding: 10px 12px; border-bottom: 1px solid #1e293b; font-size: 14px; }
+tr:hover td { background: rgba(59,130,246,0.05); }
+.page { display: none; }
+.page.active { display: block; }
+.stat-card { text-align: center; }
+.stat-val { font-size: 2rem; font-weight: 700; }
+.stat-label { font-size: 0.8rem; color: var(--muted); margin-top: 4px; }
+.modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 100; align-items: center; justify-content: center; }
+.modal-overlay.show { display: flex; }
+.modal-overlay.hide { display: none; }
+.modal { background: var(--sidebar); border: 1px solid #334155; border-radius: 16px; padding: 24px; max-width: 600px; width: 90%; max-height: 80vh; overflow-y: auto; }
+.progress-bar { height: 8px; border-radius: 4px; background: #334155; overflow: hidden; }
+.progress-fill { height: 100%; border-radius: 4px; transition: width 0.5s; }
+.login-wrap { display: flex; align-items: center; justify-content: center; min-height: 100vh; position: fixed; inset: 0; z-index: 200; background: var(--bg); }
+.tab-badge { font-size: 10px; background: var(--accent); color: white; border-radius: 50%; width: 18px; height: 18px; display: inline-flex; align-items: center; justify-content: center; margin-left: auto; }
+@media (max-width: 768px) { .sidebar { transform: translateX(-100%); } .sidebar.open { transform: translateX(0); } .main { margin-left: 0; } }
+</style>
+</head>
+<body>
+
+<!-- Login screen -->
+<div id="loginScreen" class="login-wrap" style="display:none">
+  <div class="card" style="width:360px; text-align:center;">
+    <h2 class="text-xl font-bold mb-1">AURALINK</h2>
+    <p class="text-sm mb-6" style="color:var(--muted)">Panel de Administracion</p>
+    <input id="tokenInput" type="password" placeholder="Token de acceso" class="w-full mb-4" onkeydown="if(event.key==='Enter')doLogin()">
+    <button onclick="doLogin()" class="btn btn-primary w-full">Entrar</button>
+    <p id="loginError" class="text-red-400 text-sm mt-3 hidden">Token incorrecto</p>
+  </div>
+</div>
+
+<!-- App shell -->
+<div id="appShell" style="display:none">
+  <!-- Sidebar -->
+  <div class="sidebar" id="sidebar">
+    <div class="p-4 border-b border-gray-700">
+      <h1 class="text-lg font-bold text-white">AURALINK</h1>
+      <p class="text-xs" style="color:var(--muted)">Admin Panel</p>
+    </div>
+    <nav class="mt-4">
+      <div class="nav-item active" onclick="nav('dashboard')" data-page="dashboard">
+        <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+        Dashboard
+      </div>
+      <div class="nav-item" onclick="nav('clients')" data-page="clients">
+        <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>
+        Clientes
+      </div>
+      <div class="nav-item" onclick="nav('messages')" data-page="messages">
+        <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
+        Mensajes
+      </div>
+      <div class="nav-item" onclick="nav('finance')" data-page="finance">
+        <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>
+        Finanzas
+      </div>
+      <div class="nav-item" onclick="nav('registrations')" data-page="registrations">
+        <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="8.5" cy="7" r="4"/><polyline points="17 11 19 13 23 9"/></svg>
+        Registros
+      </div>
+      <div class="nav-item" onclick="nav('support')" data-page="support">
+        <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 015.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        Soporte
+      </div>
+      <div class="nav-item" onclick="nav('backups')" data-page="backups">
+        <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        Backups
+      </div>
+    </nav>
+    <div class="absolute bottom-4 left-4 right-4">
+      <button onclick="doLogout()" class="btn btn-secondary w-full text-xs">Cerrar sesion</button>
+    </div>
+  </div>
+
+  <!-- Main content -->
+  <div class="main">
+    <div class="flex items-center justify-between mb-6">
+      <h2 id="pageTitle" class="text-xl font-bold">Dashboard</h2>
+      <span id="lastRefresh" class="text-xs" style="color:var(--muted)"></span>
+    </div>
+
+    <!-- DASHBOARD PAGE -->
+    <div id="page-dashboard" class="page active">
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6" id="dashCards"></div>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div class="card">
+          <h3 class="font-semibold mb-3">Registros ultimos 14 dias</h3>
+          <div style="position:relative;height:220px"><canvas id="chartRegTimeline"></canvas></div>
+        </div>
+        <div class="card">
+          <h3 class="font-semibold mb-3">Alertas activas</h3>
+          <div id="dashAlerts"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- CLIENTS PAGE -->
+    <div id="page-clients" class="page">
+      <div class="card mb-4">
+        <div class="flex flex-wrap gap-3 items-center">
+          <input id="clientSearch" type="text" placeholder="Buscar nombre, ID, zona..." class="flex-1 min-w-0" oninput="debounceClients()">
+          <select id="clientZone" onchange="loadClients()" class="w-32">
+            <option value="">Todas zonas</option>
+          </select>
+          <select id="clientStatus" onchange="loadClients()" class="w-40">
+            <option value="">Todos</option>
+            <option value="activo">Activos</option>
+            <option value="moroso">Morosos</option>
+            <option value="registrado">Registrados</option>
+            <option value="no_registrado">Sin registrar</option>
+          </select>
+        </div>
+      </div>
+      <div class="card">
+        <div class="overflow-x-auto">
+          <table>
+            <thead><tr><th>Nombre</th><th>ID Servicio</th><th>Plan</th><th>Balance</th><th>Estado</th><th>Registro</th><th>Zona</th></tr></thead>
+            <tbody id="clientsTable"></tbody>
+          </table>
+        </div>
+        <p id="clientsCount" class="text-xs mt-3" style="color:var(--muted)"></p>
+      </div>
+    </div>
+
+    <!-- MESSAGES PAGE -->
+    <div id="page-messages" class="page">
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+        <div class="card">
+          <h3 class="font-semibold mb-3">Componer mensaje</h3>
+          <div class="mb-3">
+            <label class="text-xs block mb-1" style="color:var(--muted)">Categoria</label>
+            <select id="msgCategory" class="w-full">
+              <option value="aviso">Aviso de red / Mantenimiento</option>
+              <option value="publicidad">Publicidad</option>
+              <option value="promocion">Promocion</option>
+              <option value="general">General</option>
+            </select>
+          </div>
+          <div class="mb-3">
+            <label class="text-xs block mb-1" style="color:var(--muted)">Destinatarios</label>
+            <select id="msgRecipients" onchange="updateRecipientCount()" class="w-full">
+              <option value="all">Todos los registrados</option>
+              <option value="zone">Por zona...</option>
+            </select>
+          </div>
+          <div id="msgZoneSelect" class="mb-3 hidden">
+            <select id="msgZone" onchange="updateRecipientCount()" class="w-full">
+              <option value="">Seleccionar zona</option>
+            </select>
+          </div>
+          <p id="recipientCount" class="text-xs mb-3" style="color:var(--muted)">0 destinatarios</p>
+          <textarea id="msgText" rows="6" class="w-full mb-3" placeholder="Escribe tu mensaje... (soporta *negritas* y _cursivas_)"></textarea>
+          <div class="flex gap-2">
+            <button onclick="previewMessage()" class="btn btn-secondary">Preview</button>
+            <button onclick="sendMessage()" class="btn btn-primary">Enviar</button>
+          </div>
+        </div>
+        <div class="card">
+          <h3 class="font-semibold mb-3">Vista previa</h3>
+          <div id="msgPreview" class="p-4 rounded-lg" style="background:#0f172a; min-height:200px; font-size:14px; line-height:1.6;">
+            <span style="color:var(--muted)">El preview aparecera aqui...</span>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <h3 class="font-semibold mb-3">Historial de envios</h3>
+        <table>
+          <thead><tr><th>Fecha</th><th>Categoria</th><th>Destinatarios</th><th>Mensaje</th></tr></thead>
+          <tbody id="msgHistory"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- FINANCE PAGE -->
+    <div id="page-finance" class="page">
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6" id="financeCards"></div>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+        <div class="card">
+          <h3 class="font-semibold mb-3">Distribucion por plan</h3>
+          <div style="position:relative;height:260px"><canvas id="chartPlans"></canvas></div>
+        </div>
+        <div class="card">
+          <h3 class="font-semibold mb-3">Top morosos</h3>
+          <div style="position:relative;height:260px"><canvas id="chartMorosos"></canvas></div>
+        </div>
+      </div>
+      <div class="card">
+        <h3 class="font-semibold mb-3">Lista de morosos</h3>
+        <table>
+          <thead><tr><th>Nombre</th><th>Plan</th><th>Balance</th></tr></thead>
+          <tbody id="morososTable"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- REGISTRATIONS PAGE -->
+    <div id="page-registrations" class="page">
+      <div class="card mb-4">
+        <div class="flex items-center gap-4">
+          <div class="flex-1">
+            <div class="flex justify-between mb-1">
+              <span class="font-semibold" id="regPercent">0%</span>
+              <span class="text-sm" style="color:var(--muted)" id="regTotal">0/0 vinculados</span>
+            </div>
+            <div class="progress-bar"><div class="progress-fill" id="regBar" style="width:0%;background:var(--accent)"></div></div>
+          </div>
+        </div>
+      </div>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+        <div class="card">
+          <h3 class="font-semibold mb-3">Progreso por zona</h3>
+          <div style="position:relative;height:280px"><canvas id="chartZones"></canvas></div>
+        </div>
+        <div class="card">
+          <h3 class="font-semibold mb-3">Registros acumulados</h3>
+          <div style="position:relative;height:280px"><canvas id="chartRegCumulative"></canvas></div>
+        </div>
+      </div>
+      <div class="card">
+        <h3 class="font-semibold mb-3">Clientes registrados</h3>
+        <table>
+          <thead><tr><th>Nombre</th><th>ID Servicio</th><th>Fecha</th></tr></thead>
+          <tbody id="regTable"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- SUPPORT PAGE -->
+    <div id="page-support" class="page">
+      <div class="card">
+        <h3 class="font-semibold mb-3">Tickets de soporte</h3>
+        <table>
+          <thead><tr><th>ID</th><th>Cliente</th><th>Detalle</th><th>Estado</th><th>Fecha</th><th>Accion</th></tr></thead>
+          <tbody id="supportTable"></tbody>
+        </table>
+        <p id="noTickets" class="text-center py-8 hidden" style="color:var(--muted)">No hay tickets pendientes</p>
+      </div>
+    </div>
+
+    <!-- BACKUPS PAGE -->
+    <div id="page-backups" class="page">
+      <!-- Device list view -->
+      <div id="backups-devices"></div>
+      <!-- Device detail view (hidden by default) -->
+      <div id="backups-detail" style="display:none"></div>
+    </div>
+
+  </div><!-- /main -->
+</div><!-- /appShell -->
+
+<!-- Client detail modal -->
+<div id="clientModal" class="modal-overlay hide" onclick="if(event.target===this)closeModal()">
+  <div class="modal">
+    <div class="flex justify-between items-center mb-4">
+      <h3 class="text-lg font-bold" id="modalTitle">Detalle</h3>
+      <button onclick="closeModal()" class="text-gray-400 hover:text-white text-xl">&times;</button>
+    </div>
+    <div id="modalBody"></div>
+  </div>
+</div>
+
+<script>
+// =========================================================================
+// Config & State
+// =========================================================================
+const API = '';
+let TOKEN = localStorage.getItem('admin_token') || '';
+const charts = {};
+let _clientTimer = null;
+let _allRecipients = [];
+
+// =========================================================================
+// Auth
+// =========================================================================
+function doLogin() {
+  const t = document.getElementById('tokenInput').value.trim();
+  if (!t) return;
+  TOKEN = t;
+  localStorage.setItem('admin_token', t);
+  // Test with a real API call
+  apiFetch('/api/dashboard').then(d => {
+    if (d) { showApp(); }
+    else { document.getElementById('loginError').classList.remove('hidden'); TOKEN=''; localStorage.removeItem('admin_token'); }
+  });
+}
+function doLogout() { TOKEN=''; localStorage.removeItem('admin_token'); location.reload(); }
+
+function showApp() {
+  document.getElementById('loginScreen').style.display = 'none';
+  document.getElementById('appShell').style.display = 'block';
+  const hash = location.hash.slice(1) || 'dashboard';
+  nav(hash);
+}
+
+// Auto-login if token saved
+if (TOKEN) { apiFetch('/api/dashboard').then(d => { if(d) showApp(); else { document.getElementById('loginScreen').style.display = 'flex'; }}); }
+else { document.getElementById('loginScreen').style.display = 'flex'; }
+
+// =========================================================================
+// API helpers
+// =========================================================================
+async function apiFetch(url, opts={}) {
+  try {
+    const r = await fetch(API + url, { ...opts, headers: { 'X-Admin-Token': TOKEN, 'Content-Type': 'application/json', ...(opts.headers||{}) }});
+    if (r.status === 401) { doLogout(); return null; }
+    if (!r.ok) return null;
+    return await r.json();
+  } catch(e) { console.error('API error:', e); return null; }
+}
+
+// =========================================================================
+// Navigation
+// =========================================================================
+const TITLES = { dashboard:'Dashboard', clients:'Clientes', messages:'Mensajes', finance:'Finanzas', registrations:'Registros', support:'Soporte', backups:'Backups' };
+
+function nav(page) {
+  location.hash = page;
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  const el = document.getElementById('page-'+page);
+  if (el) el.classList.add('active');
+  const ni = document.querySelector(`[data-page="${page}"]`);
+  if (ni) ni.classList.add('active');
+  document.getElementById('pageTitle').textContent = TITLES[page] || page;
+  loadPage(page);
+}
+
+window.addEventListener('hashchange', () => nav(location.hash.slice(1) || 'dashboard'));
+
+function loadPage(page) {
+  const now = new Date().toLocaleString('es-MX', {hour:'2-digit',minute:'2-digit'});
+  document.getElementById('lastRefresh').textContent = 'Actualizado: ' + now;
+  switch(page) {
+    case 'dashboard': loadDashboard(); break;
+    case 'clients': loadClients(); break;
+    case 'messages': loadMessages(); break;
+    case 'finance': loadFinance(); break;
+    case 'registrations': loadRegistrations(); break;
+    case 'support': loadSupport(); break;
+    case 'backups': loadBackups(); break;
+  }
+}
+
+// =========================================================================
+// Dashboard
+// =========================================================================
+async function loadDashboard() {
+  const d = await apiFetch('/api/dashboard');
+  if (!d) return;
+  document.getElementById('dashCards').innerHTML = `
+    ${statCard(d.clients_total, 'Clientes CRM', 'blue')}
+    ${statCard(d.registered, 'Registrados TG', 'green')}
+    ${statCard(d.devices_online, 'Dispositivos online', 'green')}
+    ${statCard(d.devices_offline, 'Offline', 'red')}
+    ${statCard(d.pppoe_active, 'PPPoE activos', 'blue')}
+    ${statCard(d.morosos, 'Morosos', 'yellow')}
+    ${statCard(d.devices_total, 'Dispositivos total', 'blue')}
+    ${statCard(Math.round(d.registered/Math.max(d.clients_total,1)*100)+'%', 'Vinculados', 'green')}
+  `;
+
+  // Timeline chart
+  const tl = d.registration_timeline || [];
+  renderChart('chartRegTimeline', 'bar', {
+    labels: tl.map(r => r.day ? r.day.slice(5) : ''),
+    datasets: [{ label: 'Registros', data: tl.map(r => r.count), backgroundColor: 'rgba(59,130,246,0.6)', borderRadius: 4 }]
+  });
+
+  // Alerts
+  const al = d.active_outages || [];
+  if (!al.length) {
+    document.getElementById('dashAlerts').innerHTML = '<p class="py-8 text-center" style="color:var(--muted)">Sin alertas activas</p>';
+  } else {
+    document.getElementById('dashAlerts').innerHTML = al.map(a =>
+      `<div class="flex items-center gap-2 py-2 border-b border-gray-700">
+        <span class="badge badge-red">CAIDA</span>
+        <span class="text-sm">${esc(a.device)}</span>
+        <span class="text-xs ml-auto" style="color:var(--muted)">${a.site||''}</span>
+      </div>`
+    ).join('');
+  }
+}
+
+function statCard(val, label, color) {
+  const colors = { blue:'#3b82f6', green:'#22c55e', red:'#ef4444', yellow:'#eab308' };
+  return `<div class="card stat-card"><div class="stat-val" style="color:${colors[color]||colors.blue}">${val}</div><div class="stat-label">${label}</div></div>`;
+}
+
+// =========================================================================
+// Clients
+// =========================================================================
+const ZONES = ['TML','CBR','PNS','GLR','COC','TUL','NAH','BJZ','CTR','SGR','CRL','JAL','OTR'];
+let _zonesPopulated = false;
+
+function populateZones() {
+  if (_zonesPopulated) return;
+  _zonesPopulated = true;
+  const selects = [document.getElementById('clientZone'), document.getElementById('msgZone')];
+  selects.forEach(s => { if(!s) return; ZONES.forEach(z => { const o=document.createElement('option'); o.value=z; o.textContent=z; s.appendChild(o); }); });
+}
+
+function debounceClients() { clearTimeout(_clientTimer); _clientTimer = setTimeout(loadClients, 300); }
+
+async function loadClients() {
+  populateZones();
+  const search = document.getElementById('clientSearch').value;
+  const zone = document.getElementById('clientZone').value;
+  const status = document.getElementById('clientStatus').value;
+  const params = new URLSearchParams();
+  if (search) params.set('search', search);
+  if (zone) params.set('zone', zone);
+  if (status) params.set('status', status);
+  const data = await apiFetch('/api/clients?' + params);
+  if (!data) return;
+  const tb = document.getElementById('clientsTable');
+  tb.innerHTML = data.map(c => `
+    <tr onclick="showClient(${c.id})" style="cursor:pointer">
+      <td class="font-medium">${esc(c.name)}</td>
+      <td>${esc(c.service_id||'-')}</td>
+      <td class="text-xs">${esc(c.plan||'-')}</td>
+      <td style="color:${c.balance<0?'var(--red)':'var(--green)'}">$${c.balance||0}</td>
+      <td><span class="badge ${c.status==='moroso'?'badge-red':c.status==='activo'?'badge-green':'badge-yellow'}">${c.status}</span></td>
+      <td>${c.registered?'<span class="badge badge-green">Si</span>':'<span class="badge badge-yellow">No</span>'}</td>
+      <td class="text-xs">${c.zone}</td>
+    </tr>
+  `).join('');
+  document.getElementById('clientsCount').textContent = `${data.length} clientes`;
+}
+
+async function showClient(id) {
+  const d = await apiFetch('/api/clients/'+id);
+  if (!d) return;
+  const c = d.client || {};
+  const name = `${c.firstName||''} ${c.lastName||''}`.trim() || c.companyName || '?';
+  document.getElementById('modalTitle').textContent = name;
+  const svcs = (d.services||[]).map(s => `<div class="flex justify-between py-1"><span>${esc(s.servicePlanName||'')}</span><span class="badge ${s.status===1?'badge-green':s.status===3?'badge-red':'badge-yellow'}">${s.status===1?'Activo':s.status===3?'Suspendido':'Otro'}</span></div>`).join('');
+  const invs = (d.invoices||[]).slice(0,5).map(i => `<div class="flex justify-between py-1 text-sm"><span>#${i.number||i.id} — $${i.total||0}</span><span class="text-xs" style="color:var(--muted)">${(i.createdDate||'').slice(0,10)}</span></div>`).join('');
+  const reg = d.registration;
+  document.getElementById('modalBody').innerHTML = `
+    <div class="mb-4"><span class="text-xs" style="color:var(--muted)">Balance</span><div class="text-2xl font-bold" style="color:${(c.accountBalance||0)<0?'var(--red)':'var(--green)'}">$${c.accountBalance||0}</div></div>
+    ${reg?`<div class="mb-4"><span class="badge badge-green">Registrado en Telegram</span><br><span class="text-xs" style="color:var(--muted)">ID: ${reg.service_id||'-'} | Fecha: ${(reg.linked_at||'').slice(0,10)}</span></div>`:'<div class="mb-4"><span class="badge badge-yellow">No registrado en Telegram</span></div>'}
+    <h4 class="font-semibold text-sm mb-2">Servicios</h4>${svcs||'<p class="text-xs" style="color:var(--muted)">Sin servicios</p>'}
+    <h4 class="font-semibold text-sm mt-4 mb-2">Facturas recientes</h4>${invs||'<p class="text-xs" style="color:var(--muted)">Sin facturas</p>'}
+  `;
+  const m = document.getElementById('clientModal'); m.classList.remove('hide'); m.classList.add('show');
+}
+
+function closeModal() { const m = document.getElementById('clientModal'); m.classList.remove('show'); m.classList.add('hide'); }
+
+// =========================================================================
+// Messages
+// =========================================================================
+async function loadMessages() {
+  populateZones();
+  document.getElementById('msgRecipients').onchange = function() {
+    document.getElementById('msgZoneSelect').classList.toggle('hidden', this.value !== 'zone');
+    updateRecipientCount();
+  };
+  updateRecipientCount();
+  // Load history
+  const hist = await apiFetch('/api/messages/history');
+  if (!hist) return;
+  document.getElementById('msgHistory').innerHTML = hist.map(h => {
+    const cats = {aviso:'badge-blue',publicidad:'badge-green',promocion:'badge-yellow',general:'badge-blue'};
+    return `<tr>
+      <td class="text-xs">${(h.sent_at||'').replace('T',' ').slice(0,16)}</td>
+      <td><span class="badge ${cats[h.category]||'badge-blue'}">${h.category||'aviso'}</span></td>
+      <td>${h.recipient_count}</td>
+      <td class="text-xs" style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc((h.message_text||'').slice(0,80))}</td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="4" class="text-center py-4" style="color:var(--muted)">Sin envios</td></tr>';
+}
+
+async function updateRecipientCount() {
+  const mode = document.getElementById('msgRecipients').value;
+  const zone = mode === 'zone' ? document.getElementById('msgZone').value : '';
+  const params = zone ? '?zone=' + zone : '';
+  const data = await apiFetch('/api/messages/recipients' + params);
+  _allRecipients = data || [];
+  document.getElementById('recipientCount').textContent = `${_allRecipients.length} destinatarios`;
+}
+
+async function previewMessage() {
+  const text = document.getElementById('msgText').value;
+  if (!text) return;
+  const d = await apiFetch('/api/messages/preview', { method:'POST', body: JSON.stringify({text}) });
+  if (d) document.getElementById('msgPreview').innerHTML = d.preview;
+}
+
+async function sendMessage() {
+  const text = document.getElementById('msgText').value.trim();
+  if (!text) return alert('Escribe un mensaje');
+  if (!_allRecipients.length) return alert('No hay destinatarios');
+  if (!confirm(`Enviar mensaje a ${_allRecipients.length} usuarios?`)) return;
+  const ids = _allRecipients.map(r => r.telegram_user_id);
+  const category = document.getElementById('msgCategory').value;
+  const d = await apiFetch('/api/messages/send', { method:'POST', body: JSON.stringify({text, recipient_ids:ids, category}) });
+  if (d) {
+    alert(`Enviado: ${d.sent} exitosos, ${d.errors} errores`);
+    document.getElementById('msgText').value = '';
+    document.getElementById('msgPreview').innerHTML = '<span style="color:var(--muted)">Enviado!</span>';
+    loadMessages();
+  }
+}
+
+// =========================================================================
+// Finance
+// =========================================================================
+async function loadFinance() {
+  const [summary, morosos] = await Promise.all([
+    apiFetch('/api/finance/summary'),
+    apiFetch('/api/finance/morosos')
+  ]);
+  if (!summary) return;
+
+  document.getElementById('financeCards').innerHTML = `
+    ${statCard('$'+summary.total_unpaid, 'Por cobrar', 'red')}
+    ${statCard(summary.morosos_count, 'Morosos', 'yellow')}
+    ${statCard(summary.invoice_count, 'Facturas pendientes', 'blue')}
+    ${statCard(Object.values(summary.plan_distribution||{}).reduce((a,b)=>a+b,0), 'Servicios activos', 'green')}
+  `;
+
+  // Plan distribution pie chart
+  const plans = summary.plan_distribution || {};
+  const planColors = ['#3b82f6','#8b5cf6','#22c55e','#eab308','#ef4444','#ec4899'];
+  renderChart('chartPlans', 'doughnut', {
+    labels: Object.keys(plans),
+    datasets: [{ data: Object.values(plans), backgroundColor: planColors.slice(0, Object.keys(plans).length), borderWidth: 0 }]
+  }, { plugins: { legend: { position: 'bottom', labels: { color: '#94a3b8', font: {size:11} } } } });
+
+  // Morosos bar chart
+  if (morosos && morosos.length) {
+    const top = morosos.slice(0, 15);
+    renderChart('chartMorosos', 'bar', {
+      labels: top.map(m => m.name.split(' ')[0]),
+      datasets: [{ label: 'Deuda', data: top.map(m => Math.abs(m.balance)), backgroundColor: 'rgba(239,68,68,0.6)', borderRadius: 4 }]
+    }, { indexAxis: 'y', plugins: { legend: {display:false} } });
+  }
+
+  // Morosos table
+  if (morosos) {
+    document.getElementById('morososTable').innerHTML = morosos.map(m => `
+      <tr>
+        <td>${esc(m.name)}</td>
+        <td class="text-xs">${esc(m.plan)}</td>
+        <td style="color:var(--red)">$${m.balance}</td>
+      </tr>
+    `).join('');
+  }
+}
+
+// =========================================================================
+// Registrations
+// =========================================================================
+async function loadRegistrations() {
+  const [reg, timeline] = await Promise.all([
+    apiFetch('/api/registrations'),
+    apiFetch('/api/registrations/timeline')
+  ]);
+  if (!reg) return;
+
+  document.getElementById('regPercent').textContent = reg.percent + '%';
+  document.getElementById('regTotal').textContent = `${reg.total_registered}/${reg.total_clients} vinculados`;
+  document.getElementById('regBar').style.width = reg.percent + '%';
+
+  // Zone chart
+  const zs = reg.zone_stats || {};
+  const zoneNames = Object.keys(zs).sort();
+  renderChart('chartZones', 'bar', {
+    labels: zoneNames,
+    datasets: [
+      { label: 'Vinculados', data: zoneNames.map(z => zs[z].linked), backgroundColor: 'rgba(34,197,94,0.7)', borderRadius: 4 },
+      { label: 'Contactados', data: zoneNames.map(z => zs[z].contacted), backgroundColor: 'rgba(234,179,8,0.7)', borderRadius: 4 },
+      { label: 'Pendientes', data: zoneNames.map(z => zs[z].pending), backgroundColor: 'rgba(100,116,139,0.5)', borderRadius: 4 },
+    ]
+  }, { scales: { x: { stacked: true }, y: { stacked: true } } });
+
+  // Cumulative timeline
+  if (timeline && timeline.length) {
+    renderChart('chartRegCumulative', 'line', {
+      labels: timeline.map(r => r.day ? r.day.slice(5) : ''),
+      datasets: [{ label: 'Acumulado', data: timeline.map(r => r.cumulative), borderColor: '#3b82f6', backgroundColor: 'rgba(59,130,246,0.1)', fill: true, tension: 0.3 }]
+    });
+  }
+
+  // Registered list
+  const rl = reg.registered_list || [];
+  document.getElementById('regTable').innerHTML = rl.map(r => `
+    <tr><td>${esc(r.name)}</td><td>${esc(r.service_id||'-')}</td><td class="text-xs">${(r.linked_at||'').slice(0,10)}</td></tr>
+  `).join('') || '<tr><td colspan="3" class="text-center py-4" style="color:var(--muted)">Sin registros</td></tr>';
+}
+
+// =========================================================================
+// Support
+// =========================================================================
+async function loadSupport() {
+  const tickets = await apiFetch('/api/support/tickets');
+  if (!tickets) return;
+  const open = tickets.filter(t => t.status !== 'resolved');
+  const closed = tickets.filter(t => t.status === 'resolved');
+
+  if (!tickets.length) {
+    document.getElementById('supportTable').innerHTML = '';
+    document.getElementById('noTickets').classList.remove('hidden');
+    return;
+  }
+  document.getElementById('noTickets').classList.add('hidden');
+
+  document.getElementById('supportTable').innerHTML = [...open, ...closed].map(t => `
+    <tr>
+      <td>#${t.id}</td>
+      <td>${esc(t.client_name||t.telegram_user_id||'?')}</td>
+      <td class="text-xs" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t.details||t.description||'')}</td>
+      <td><span class="badge ${t.status==='resolved'?'badge-green':'badge-yellow'}">${t.status||'open'}</span></td>
+      <td class="text-xs">${(t.created_at||'').slice(0,16)}</td>
+      <td>${t.status!=='resolved'?`<button onclick="resolveTicket(${t.id})" class="btn btn-primary text-xs py-1 px-3">Resolver</button>`:''}</td>
+    </tr>
+  `).join('');
+}
+
+async function resolveTicket(id) {
+  const note = prompt('Nota de resolucion:');
+  if (note === null) return;
+  await apiFetch('/api/support/tickets/'+id+'/resolve', { method:'POST', body: JSON.stringify({note}) });
+  loadSupport();
+}
+
+// =========================================================================
+// Chart helper
+// =========================================================================
+function renderChart(canvasId, type, data, extraOpts={}) {
+  if (charts[canvasId]) charts[canvasId].destroy();
+  const ctx = document.getElementById(canvasId);
+  if (!ctx) return;
+  charts[canvasId] = new Chart(ctx, {
+    type,
+    data,
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { labels: { color: '#94a3b8' } }, ...((extraOpts.plugins)||{}) },
+      scales: type==='doughnut'||type==='pie' ? {} : {
+        x: { ticks: { color: '#64748b', font:{size:11} }, grid: { color: 'rgba(51,65,85,0.3)' }, ...(extraOpts.scales?.x||{}) },
+        y: { ticks: { color: '#64748b', font:{size:11} }, grid: { color: 'rgba(51,65,85,0.3)' }, ...(extraOpts.scales?.y||{}) },
+      },
+      ...extraOpts,
+    }
+  });
+}
+
+// =========================================================================
+// Utils
+// =========================================================================
+function esc(s) { const d=document.createElement('div'); d.textContent=s||''; return d.innerHTML; }
+
+// =========================================================================
+// Backups (multi-device, month/day grouping)
+// =========================================================================
+let _currentBackupDevice = null;
+
+async function loadBackups() {
+  _currentBackupDevice = null;
+  document.getElementById('backups-detail').style.display = 'none';
+  document.getElementById('backups-devices').style.display = 'block';
+
+  const data = await apiFetch('/api/backups/devices');
+  if (!data || !data.length) {
+    document.getElementById('backups-devices').innerHTML = '<div class="card"><p class="text-center py-8" style="color:var(--muted)">No hay dispositivos configurados</p></div>';
+    return;
+  }
+
+  document.getElementById('backups-devices').innerHTML = `
+    <p class="text-sm mb-4" style="color:var(--muted)">Selecciona un dispositivo para ver sus respaldos</p>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+      ${data.map(d => `
+        <div class="card" style="cursor:pointer;transition:border-color 0.15s" onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='#334155'" onclick="openDeviceBackups('${esc(d.id)}')">
+          <div class="flex items-start gap-3">
+            <div style="background:rgba(59,130,246,0.15);border-radius:10px;padding:10px;flex-shrink:0">
+              <svg width="24" height="24" fill="none" stroke="#3b82f6" stroke-width="2" viewBox="0 0 24 24"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><circle cx="6" cy="6" r="1"/><circle cx="6" cy="18" r="1"/></svg>
+            </div>
+            <div class="flex-1 min-w-0">
+              <h3 class="font-semibold">${esc(d.name)}</h3>
+              <p class="text-xs mt-1" style="color:var(--muted)">${esc(d.description)}</p>
+              <div class="flex items-center gap-4 mt-3">
+                <span class="text-xs"><span style="color:var(--muted)">Host:</span> ${esc(d.host)}</span>
+                <span class="text-xs"><span style="color:var(--muted)">Archivos:</span> ${d.file_count}</span>
+              </div>
+              ${d.last_backup ? `<p class="text-xs mt-1"><span style="color:var(--muted)">Ultimo backup:</span> <span style="color:var(--green)">${esc(d.last_backup)}</span></p>` : '<p class="text-xs mt-1" style="color:var(--yellow)">Sin backups</p>'}
+            </div>
+            <svg width="20" height="20" fill="none" stroke="var(--muted)" stroke-width="2" viewBox="0 0 24 24" style="flex-shrink:0;margin-top:8px"><polyline points="9 18 15 12 9 6"/></svg>
+          </div>
+        </div>
+      `).join('')}
+    </div>
+  `;
+}
+
+async function openDeviceBackups(deviceId) {
+  _currentBackupDevice = deviceId;
+  document.getElementById('backups-devices').style.display = 'none';
+  const detail = document.getElementById('backups-detail');
+  detail.style.display = 'block';
+  detail.innerHTML = '<p class="text-center py-8" style="color:var(--muted)">Cargando...</p>';
+
+  const data = await apiFetch('/api/backups/devices/' + deviceId + '/files');
+  if (!data) { detail.innerHTML = '<p class="text-center py-8" style="color:var(--red)">Error cargando backups</p>'; return; }
+
+  const dev = data.device || {};
+  const months = data.months || [];
+
+  const MONTH_NAMES = {
+    '01':'Enero','02':'Febrero','03':'Marzo','04':'Abril','05':'Mayo','06':'Junio',
+    '07':'Julio','08':'Agosto','09':'Septiembre','10':'Octubre','11':'Noviembre','12':'Diciembre'
+  };
+
+  let monthsHtml = '';
+  if (!months.length) {
+    monthsHtml = '<div class="card"><p class="text-center py-8" style="color:var(--muted)">No hay backups disponibles</p></div>';
+  } else {
+    monthsHtml = months.map((m, idx) => {
+      const [year, mon] = m.month.split('-');
+      const monthName = MONTH_NAMES[mon] || mon;
+      const dayCount = m.days.length;
+      const fileCount = m.days.reduce((sum, d) => sum + d.files.length, 0);
+
+      const daysHtml = m.days.map(day => {
+        const dayNum = day.date.split('-')[2];
+        const filesHtml = day.files.map(f => `
+          <div class="flex items-center justify-between py-2 px-3" style="background:rgba(15,23,42,0.5);border-radius:6px;margin-bottom:4px">
+            <div class="flex items-center gap-2">
+              <span class="badge ${f.type==='binary'?'badge-blue':'badge-green'}">${f.type==='binary'?'.backup':'.rsc'}</span>
+              <span class="text-sm">${esc(f.filename)}</span>
+            </div>
+            <div class="flex items-center gap-3">
+              <span class="text-xs" style="color:var(--muted)">${f.size_human}</span>
+              <button onclick="downloadBackup('${esc(deviceId)}','${esc(f.filename)}')" class="btn btn-secondary text-xs py-1 px-3">Descargar</button>
+            </div>
+          </div>
+        `).join('');
+
+        return `
+          <div class="mb-3">
+            <div class="flex items-center gap-2 mb-2">
+              <span class="text-sm font-medium">Dia ${dayNum}</span>
+              <span class="text-xs" style="color:var(--muted)">${day.date}</span>
+              <span class="text-xs" style="color:var(--muted)">${day.files.length} archivo${day.files.length>1?'s':''}</span>
+            </div>
+            ${filesHtml}
+          </div>
+        `;
+      }).join('');
+
+      return `
+        <div class="card mb-3">
+          <div class="flex items-center justify-between cursor-pointer" onclick="toggleMonth('bkMonth${idx}',this)">
+            <div class="flex items-center gap-3">
+              <svg class="month-arrow" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="transition:transform 0.2s;${idx===0?'transform:rotate(90deg)':''}"><polyline points="9 18 15 12 9 6"/></svg>
+              <h3 class="font-semibold">${monthName} ${year}</h3>
+            </div>
+            <div class="flex items-center gap-3">
+              <span class="text-xs" style="color:var(--muted)">${dayCount} dia${dayCount>1?'s':''}</span>
+              <span class="text-xs" style="color:var(--muted)">${fileCount} archivo${fileCount>1?'s':''}</span>
+            </div>
+          </div>
+          <div id="bkMonth${idx}" class="mt-4" style="${idx===0?'':'display:none'}">
+            ${daysHtml}
+          </div>
+        </div>
+      `;
+    }).join('');
+  }
+
+  detail.innerHTML = `
+    <div class="flex items-center justify-between mb-4">
+      <div class="flex items-center gap-3">
+        <button onclick="loadBackups()" class="btn btn-secondary py-1 px-3">
+          <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="display:inline;vertical-align:middle"><polyline points="15 18 9 12 15 6"/></svg>
+          Volver
+        </button>
+        <div>
+          <h3 class="font-semibold">${esc(dev.name)}</h3>
+          <p class="text-xs" style="color:var(--muted)">${esc(dev.description)}</p>
+        </div>
+      </div>
+      <button onclick="createBackup('${esc(deviceId)}')" id="btnCreateBackup" class="btn btn-primary">Crear backup ahora</button>
+    </div>
+    ${monthsHtml}
+  `;
+}
+
+function toggleMonth(id, header) {
+  const el = document.getElementById(id);
+  const arrow = header.querySelector('.month-arrow');
+  if (el.style.display === 'none') {
+    el.style.display = 'block';
+    if (arrow) arrow.style.transform = 'rotate(90deg)';
+  } else {
+    el.style.display = 'none';
+    if (arrow) arrow.style.transform = '';
+  }
+}
+
+function downloadBackup(deviceId, filename) {
+  const url = API + '/api/backups/devices/' + encodeURIComponent(deviceId) + '/download/' + encodeURIComponent(filename);
+  fetch(url, { headers: { 'X-Admin-Token': TOKEN } })
+    .then(r => { if(!r.ok) throw new Error('Download failed'); return r.blob(); })
+    .then(blob => {
+      const u = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = u; a.download = filename; a.click();
+      URL.revokeObjectURL(u);
+    })
+    .catch(e => alert('Error descargando: ' + e.message));
+}
+
+async function createBackup(deviceId) {
+  const btn = document.getElementById('btnCreateBackup');
+  btn.disabled = true;
+  btn.textContent = 'Creando...';
+  const d = await apiFetch('/api/backups/devices/' + deviceId + '/create', { method: 'POST' });
+  btn.disabled = false;
+  btn.textContent = 'Crear backup ahora';
+  if (d && d.ok) {
+    alert('Backup creado: ' + (d.files||[]).join(', '));
+    openDeviceBackups(deviceId);
+  } else {
+    alert('Error: ' + (d && d.error ? d.error + ' ' + (d.detail||'') : 'Fallo la conexion'));
+  }
+}
+
+</script>
+</body>
+</html>
