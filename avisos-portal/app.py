@@ -112,14 +112,10 @@ def _check_registered(ppp_name: str) -> bool:
 
 
 async def _get_ppp_name(client_ip: str) -> str | None:
-    """Get PPPoE secret name for a client IP via MikroTik SSH."""
-    mk_script = (
-        f':foreach s in=[/ppp active find where address={client_ip}] do={{ '
-        f':put [/ppp active get $s name] }}'
-    )
+    """Get PPPoE secret name for a client IP via MikroTik SSH (terse output)."""
     cmd = (
         f"ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -o BatchMode=yes "
-        f'{MIKROTIK_USER}@{MIKROTIK_IP} "{mk_script}"'
+        f"{MIKROTIK_USER}@{MIKROTIK_IP} /ppp/active/print\\ terse\\ where\\ address={client_ip}"
     )
     try:
         proc = await asyncio.create_subprocess_shell(
@@ -127,8 +123,9 @@ async def _get_ppp_name(client_ip: str) -> str | None:
         )
         stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=10)
         if proc.returncode == 0:
-            name = stdout.decode().strip()
-            return name if name else None
+            for part in stdout.decode().strip().split():
+                if part.startswith("name="):
+                    return part[5:]
     except Exception as e:
         log.error("Error getting PPP name for %s: %s", client_ip, e)
     return None
@@ -585,22 +582,38 @@ async def index(request):
     return web.Response(text=html, content_type="text/html")
 
 
+def _captive_ok_response(path: str) -> web.Response:
+    """Return the correct 'internet OK' response for each captive portal detection endpoint."""
+    if path in ("/generate_204", "/gen_204"):
+        return web.Response(status=204)
+    if path == "/success.txt":
+        return web.Response(text="success\n")
+    if path == "/connecttest.txt":
+        return web.Response(text="Microsoft Connect Test")
+    if path in ("/hotspot-detect.html", "/library/test/success.html"):
+        return web.Response(text="<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>",
+                            content_type="text/html")
+    return web.Response(status=204)
+
+
 async def captive_redirect(request):
-    """Redirect to portal only if there's an active announcement."""
+    """Redirect to portal only if there's an active announcement and client is not registered."""
     state = _load_state()
     if not state:
-        # No announcement — return what the device expects (internet OK)
-        path = request.path
-        if path in ("/generate_204", "/gen_204"):
-            return web.Response(status=204)
-        if path == "/success.txt":
-            return web.Response(text="success\n")
-        if path == "/connecttest.txt":
-            return web.Response(text="Microsoft Connect Test")
-        if path in ("/hotspot-detect.html", "/library/test/success.html"):
-            return web.Response(text="<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>",
-                                content_type="text/html")
-        return web.Response(status=204)
+        return _captive_ok_response(request.path)
+
+    # Auto-dismiss: if client is registered, return "internet OK" (no captive portal popup)
+    client_ip = request.remote
+    if client_ip and client_ip.startswith(ALLOWED_PREFIXES):
+        try:
+            ppp_name = await _get_ppp_name(client_ip)
+            if ppp_name and _check_registered(ppp_name):
+                await _permanent_dismiss(client_ip, ppp_name)
+                log.info("Auto-dismiss captive check: %s (%s) is registered", ppp_name, client_ip)
+                return _captive_ok_response(request.path)
+        except Exception as e:
+            log.warning("Auto-dismiss captive check failed for %s: %s", client_ip, e)
+
     raise web.HTTPFound("/")
 
 
