@@ -819,6 +819,107 @@ async def api_backup_create(request):
 
 
 # ---------------------------------------------------------------------------
+# API: Services (Docker container management)
+# ---------------------------------------------------------------------------
+MANAGED_SERVICES = {
+    "aura-bot": {
+        "name": "Aura Bot",
+        "description": "Bot de Telegram (IA, registro, cobranza, monitoreo)",
+        "compose_dir": "/root/aura-bot",
+    },
+    "avisos-portal": {
+        "name": "Portal de Avisos",
+        "description": "Captive portal para avisos a clientes",
+        "compose_dir": "/root/avisos-portal",
+    },
+    "admin-portal": {
+        "name": "Admin Portal",
+        "description": "Este panel de administracion",
+        "compose_dir": "/root/admin-portal",
+    },
+}
+
+
+async def _run_ssh_cmd(cmd: str, timeout: int = 30) -> tuple[int, str, str]:
+    """Run a command via shell. Returns (returncode, stdout, stderr)."""
+    proc = await asyncio.create_subprocess_shell(
+        cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+    )
+    try:
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    except asyncio.TimeoutError:
+        proc.kill()
+        return -1, "", "timeout"
+    return proc.returncode, (stdout or b"").decode(), (stderr or b"").decode()
+
+
+async def api_services_list(request):
+    """List managed services with their Docker container status."""
+    result = []
+    for svc_id, svc in MANAGED_SERVICES.items():
+        # Get container status
+        rc, stdout, stderr = await _run_ssh_cmd(
+            f"docker inspect --format '{{{{.State.Status}}}} {{{{.State.StartedAt}}}}' {svc_id} 2>/dev/null"
+        )
+        status = "unknown"
+        started_at = ""
+        if rc == 0 and stdout.strip():
+            parts = stdout.strip().split(" ", 1)
+            status = parts[0]
+            started_at = parts[1] if len(parts) > 1 else ""
+
+        result.append({
+            "id": svc_id,
+            "name": svc["name"],
+            "description": svc["description"],
+            "status": status,
+            "started_at": started_at[:19].replace("T", " ") if started_at else "",
+        })
+    return web.json_response(result)
+
+
+async def api_service_restart(request):
+    """Restart a managed Docker service."""
+    svc_id = request.match_info["service_id"]
+    svc = MANAGED_SERVICES.get(svc_id)
+    if not svc:
+        return web.json_response({"error": "unknown service"}, status=404)
+
+    compose_dir = svc["compose_dir"]
+    log.info("Restarting service %s (dir: %s)", svc_id, compose_dir)
+
+    rc, stdout, stderr = await _run_ssh_cmd(
+        f"docker compose -f {compose_dir}/docker-compose.yml restart",
+        timeout=60
+    )
+
+    if rc != 0:
+        return web.json_response({
+            "error": "restart failed",
+            "detail": (stderr or stdout)[:500]
+        }, status=500)
+
+    return web.json_response({"ok": True, "service": svc_id})
+
+
+async def api_service_logs(request):
+    """Get recent logs for a managed Docker service."""
+    svc_id = request.match_info["service_id"]
+    if svc_id not in MANAGED_SERVICES:
+        return web.json_response({"error": "unknown service"}, status=404)
+
+    lines = int(request.query.get("lines", "50"))
+    lines = min(lines, 200)
+
+    rc, stdout, stderr = await _run_ssh_cmd(
+        f"docker logs {svc_id} --tail {lines} 2>&1",
+        timeout=15
+    )
+
+    return web.json_response({"logs": stdout or stderr, "lines": lines})
+
+
+# ---------------------------------------------------------------------------
 # Static files + App setup
 # ---------------------------------------------------------------------------
 async def on_startup(app):
@@ -858,6 +959,9 @@ def create_app():
     app.router.add_get("/api/backups/devices/{device_id}/files", api_backup_files)
     app.router.add_get("/api/backups/devices/{device_id}/download/{filename}", api_backup_download)
     app.router.add_post("/api/backups/devices/{device_id}/create", api_backup_create)
+    app.router.add_get("/api/services", api_services_list)
+    app.router.add_post("/api/services/{service_id}/restart", api_service_restart)
+    app.router.add_get("/api/services/{service_id}/logs", api_service_logs)
 
     # Static files
     app.router.add_static("/static", Path(__file__).parent / "static")

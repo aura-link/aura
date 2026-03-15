@@ -1277,32 +1277,35 @@ Solo los 4 planes principales reciben avisos automaticos de cobranza y suspensio
 
 Estos datos se envian automaticamente en los recordatorios (dia 3), advertencia (dia 7) y aviso de suspension (dia 8).
 
-## Estado Actual (2026-03-01)
-- **210 dispositivos** en UISP: **194 conectados**, 16 desconectados (14 client + 2 unauthorized)
-- **240 CRM clientes / 241 servicios** — 222 enlazados 1:1 a NMS endpoints (19 sin enlace)
-- **254 PPPoE secrets** (~199 sesiones activas), clienteprueba deshabilitado, pool 506 IPs
-- **MikroTik**: PCC src-address:**6** en **6 WANs activas**, fasttrack OFF, QoS CAKE funcional, QUIC bloqueado, SNI wildcards corregidos
-- **WANs activas**: WAN1 (Starlink2, :6/0), WAN5 (StarlinkMini, :6/1), WAN10 (Chaviton macvlan, :6/2), WAN7 (Chuy1, :6/3), WAN8 (Chuy2, :6/4), WAN9 (StarlinkAurora, :6/5)
-- **WANs deshabilitadas**: WAN2 (Sergio <10Mbps), WAN3/WAN4 (Presidencia), WAN6 (StarlinkTotin — ISP Force200 issues)
-- **WAN11 pendiente**: macvlan bajo ether8-WAN (192.168.104.10/24), ISP no activo — necesita slot :6/x cuando se active (requiere recalcular a :7)
+## Estado Actual (2026-03-03)
+- **219 dispositivos** en UISP: **189 conectados**, ~24 desconectados autorizados, 35 phantoms eliminados hoy
+- **247 CRM servicios activos** (+6 nuevos clientes) + 60 quoted (borradores viejos) + 3 ended = 310 total
+- **258 PPPoE secrets** (~207 sesiones activas), clienteprueba deshabilitado, pool 506 IPs
+- **MikroTik**: PCC src-address:**7** en **7 WANs activas**, fasttrack OFF, QoS CAKE funcional, QUIC bloqueado, SNI wildcards corregidos
+- **WANs activas (7)**: WAN1 (Starlink2, :7/0), WAN5 (StarlinkMini, :7/1), WAN6 (StarlinkTotin, :7/2), WAN7 (Chuy1, :7/3), WAN8 (Chuy2, :7/4), WAN9 (StarlinkAurora, :7/5), WAN10 (Chaviton macvlan, :7/6)
+- **WANs deshabilitadas**: WAN2 (Sergio <10Mbps), WAN3/WAN4 (Presidencia)
+- **WAN6 reactivada**: ISP Force200 issues resueltos, reconectada 2026-03-03. Netwatch src-address corregido a 192.168.4.51
+- **WAN11 pendiente**: macvlan bajo ether8-WAN (192.168.104.10/24), ISP no activo — necesita slot :7/x cuando se active (requiere recalcular a :8)
+- **25 morosos** en address-list (era 15 en Mar 1)
 - **UISP VPS routing**: Todo tráfico de antenas al VPS va por ZeroTier (mangle Skip-PCC + ruta estática 217.216.85.65/32 via 10.147.17.92)
 - **Connection string UISP**: Flag `allowUntrustedCertificate` corregido en 4 archivos del contenedor unms-api
 - **ucrm CPU limitado**: `docker update --cpus=2 ucrm` aplicado para evitar spikes que desconectan antenas (se pierde al actualizar UISP)
 - **Aura Bot "AURA"** en produccion en VPS con Docker — diagnostico automatico + avisos portal + cambio plan + soporte humano
 - **Diagnostico Tier 1**: problemas claros (antena off, suspendido, sin PPPoE) → respuesta automatica $0. Ambiguos (lento, señal baja) → pasa contexto pre-ejecutado a Claude (~$0.02, sin re-ejecutar tools)
-- **Avisos Portal**: NAT activa, solo `aurora` (10.10.0.254) en address-list `avisos` para pruebas. Scheduler `populate-avisos` desactivado. Re-activar cuando pruebas exitosas.
-- **Aviso scheduler**: Transiciones automaticas: soft (→Mar14) → medium (→Mar27) → strict (→Mar31) → off (Abr1)
-- **Avisos dismiss mejorado**: Registrados se excluyen inmediatamente al vincular. "Lo haré después" da 24h de gracia (no 5 min). Script populate-avisos limpia registrados en cada ejecución.
-- **Cambio de plan**: /cambiarplan disponible para clientes, admin aprueba, aplica dia 1 del mes siguiente
-- **Monitor de red** corriendo: 25 zonas, 175 endpoints, 18 infra tracked, polling cada 2 min, anti-flap 3 polls, cooldown clientes por device_id, recovery solo >10 min
+- **Avisos Portal EN PRODUCCION**: 134 clientes en avisos, 11 en avisos-visto (registrados), populate-avisos habilitado (cada 5 min)
+- **Aviso scheduler HABILITADO**: AVISO_SCHEDULER_ENABLED=true, auto-transiciones: soft (→Mar15) → medium (→Mar25) → strict (→Mar31) → persistent (Abr1+)
+- **Avisos 4 fases**: soft (informativo, dismiss libre), medium (verifica estricto, "después" da internet), strict/persistent (solo "Ya me registré", 5 min internet si no registrado)
+- **Avisos dismiss mejorado**: Registrados se excluyen inmediatamente al vincular. "Lo haré después" da 24h de gracia (soft/medium). Script populate-avisos limpia registrados en cada ejecución.
+- **Cambio de plan**: /cambiarplan disponible para clientes, admin aprueba, aplica dia 1 del mes siguiente. 1 pendiente de aprobación.
+- **Monitor de red** corriendo: 25 zonas, 176 endpoints, 18 infra tracked, polling cada 2 min, anti-flap 3 polls, cooldown clientes por device_id, recovery solo >10 min
 - **Sistema de cobranza** activo: BILLING_START_MONTH=2026-04, listo para abril
-- **Sistema de onboarding**: /sinvincular, /progreso (con sync + lista registrados), /mensaje — 8 clientes vinculados
+- **Sistema de onboarding**: /sinvincular, /progreso (con sync + lista registrados), /mensaje — **13 clientes vinculados** (era 8)
 - **Portal morosos** operativo: HTTP + HTTPS redirect, sync-morosos cada 1 min, Telegram permitido
 - **Admin portal** en produccion: https://server.auralink.link:8092 — 7 pestañas (Dashboard, Clientes, Mensajes, Finanzas, Registros, Soporte, Backups)
 - **Backups automatizados**: MikroTik backup-diario (3AM) + VPS pull SCP (cron 4:30/4:35 AM), retencion 14 dias, descargables desde admin-portal pestaña Backups
-- **Enlace PtP Colmenares**: bajado a 40MHz + firmware XC.v8.7.19 (80MHz causaba CPU 100% en Rocket 5AC Lite). Pendiente reemplazar dishes airMAX por AC compatibles
+- **SSL cert**: Let's Encrypt expira 17 mayo 2026 (~75 días)
+- **VPS saludable**: Load 0.49, RAM 73% libre, Disco 88% libre, 17 containers all healthy
 - **172.168.x.x restaurado**: re-agregado a local-networks (fix temporal hasta migrar a RFC1918)
 - **~23 antenas sin UISP**: tienen PPPoE pero credenciales SSH desconocidas, requieren acceso fisico
-- **Decryption errors**: reducidos ~90% (165/hr → ~34/5min), 6 MACs restantes no fixeables remotamente
-- **Prioridad**: vincular clientes a Telegram antes de abril (8 vinculados, aviso captive portal activo)
-- **UISP v3.0.159**: Actualizado 2026-03-01 (era v3.0.151). CRM v4.5.33. Connection string flag + ucrm CPU limit re-aplicados post-update. API v2.1 ya no acepta params `count`/`page`/`pageSize` en GET /devices.
+- **Prioridad**: vincular clientes a Telegram antes de abril (13/258 = 5%, avisos portal activado para empujar registros)
+- **UISP v3.0.159**: Actualizado 2026-03-01 (era v3.0.151). CRM v4.5.33. Connection string flag + ucrm CPU limit re-aplicados post-update.

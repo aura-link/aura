@@ -97,6 +97,10 @@ tr:hover td { background: rgba(59,130,246,0.05); }
         <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
         Backups
       </div>
+      <div class="nav-item" onclick="nav('sistema')" data-page="sistema">
+        <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+        Sistema
+      </div>
     </nav>
     <div class="absolute bottom-4 left-4 right-4">
       <button onclick="doLogout()" class="btn btn-secondary w-full text-xs">Cerrar sesion</button>
@@ -268,6 +272,19 @@ tr:hover td { background: rgba(59,130,246,0.05); }
       </div>
     </div>
 
+    <!-- SISTEMA PAGE -->
+    <div id="page-sistema" class="page">
+      <div id="servicesList"></div>
+      <!-- Log viewer modal -->
+      <div id="logViewer" style="display:none" class="card mt-4">
+        <div class="flex justify-between items-center mb-3">
+          <h3 class="font-semibold" id="logTitle">Logs</h3>
+          <button onclick="closeLogViewer()" class="btn btn-secondary text-xs py-1 px-3">Cerrar</button>
+        </div>
+        <pre id="logContent" style="background:#0f172a;padding:16px;border-radius:8px;font-size:12px;max-height:400px;overflow-y:auto;white-space:pre-wrap;word-break:break-all;color:#94a3b8;"></pre>
+      </div>
+    </div>
+
     <!-- BACKUPS PAGE -->
     <div id="page-backups" class="page">
       <!-- Device list view -->
@@ -342,7 +359,7 @@ async function apiFetch(url, opts={}) {
 // =========================================================================
 // Navigation
 // =========================================================================
-const TITLES = { dashboard:'Dashboard', clients:'Clientes', messages:'Mensajes', finance:'Finanzas', registrations:'Registros', support:'Soporte', backups:'Backups' };
+const TITLES = { dashboard:'Dashboard', clients:'Clientes', messages:'Mensajes', finance:'Finanzas', registrations:'Registros', support:'Soporte', backups:'Backups', sistema:'Sistema' };
 
 function nav(page) {
   location.hash = page;
@@ -369,6 +386,7 @@ function loadPage(page) {
     case 'registrations': loadRegistrations(); break;
     case 'support': loadSupport(); break;
     case 'backups': loadBackups(); break;
+    case 'sistema': loadSistema(); break;
   }
 }
 
@@ -856,6 +874,78 @@ async function createBackup(deviceId) {
   } else {
     alert('Error: ' + (d && d.error ? d.error + ' ' + (d.detail||'') : 'Fallo la conexion'));
   }
+}
+
+// =========================================================================
+// Sistema (Service Management)
+// =========================================================================
+async function loadSistema() {
+  const data = await apiFetch('/api/services');
+  if (!data) { document.getElementById('servicesList').innerHTML = '<div class="card"><p class="text-center py-8" style="color:var(--muted)">Error cargando servicios</p></div>'; return; }
+
+  const statusColors = { running:'var(--green)', restarting:'var(--yellow)', exited:'var(--red)', dead:'var(--red)' };
+  const statusLabels = { running:'Corriendo', restarting:'Reiniciando', exited:'Detenido', dead:'Muerto', unknown:'Desconocido' };
+  const statusBadge = { running:'badge-green', restarting:'badge-yellow', exited:'badge-red', dead:'badge-red', unknown:'badge-yellow' };
+
+  document.getElementById('servicesList').innerHTML = `
+    <p class="text-sm mb-4" style="color:var(--muted)">Servicios Docker en el VPS</p>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+      ${data.map(s => `
+        <div class="card" id="svc-card-${esc(s.id)}">
+          <div class="flex items-start gap-3">
+            <div style="background:rgba(${s.status==='running'?'34,197,94':'239,68,68'},0.15);border-radius:10px;padding:10px;flex-shrink:0">
+              <svg width="24" height="24" fill="none" stroke="${statusColors[s.status]||'var(--muted)'}" stroke-width="2" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><circle cx="12" cy="12" r="3"/></svg>
+            </div>
+            <div class="flex-1 min-w-0">
+              <div class="flex items-center gap-2">
+                <h3 class="font-semibold">${esc(s.name)}</h3>
+                <span class="badge ${statusBadge[s.status]||'badge-yellow'}">${statusLabels[s.status]||s.status}</span>
+              </div>
+              <p class="text-xs mt-1" style="color:var(--muted)">${esc(s.description)}</p>
+              ${s.started_at ? `<p class="text-xs mt-1"><span style="color:var(--muted)">Inicio:</span> ${esc(s.started_at)}</p>` : ''}
+              <div class="flex gap-2 mt-3">
+                <button onclick="restartService('${esc(s.id)}')" id="btn-restart-${esc(s.id)}" class="btn btn-primary text-xs py-1 px-3">Reiniciar</button>
+                <button onclick="viewLogs('${esc(s.id)}','${esc(s.name)}')" class="btn btn-secondary text-xs py-1 px-3">Ver logs</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      `).join('')}
+    </div>
+  `;
+  closeLogViewer();
+}
+
+async function restartService(svcId) {
+  if (!confirm('Reiniciar ' + svcId + '?')) return;
+  const btn = document.getElementById('btn-restart-' + svcId);
+  if (btn) { btn.disabled = true; btn.textContent = 'Reiniciando...'; }
+  const d = await apiFetch('/api/services/' + svcId + '/restart', { method: 'POST' });
+  if (btn) { btn.disabled = false; btn.textContent = 'Reiniciar'; }
+  if (d && d.ok) {
+    alert(svcId + ' reiniciado correctamente');
+    loadSistema();
+  } else {
+    alert('Error: ' + (d && d.error ? d.error + '\n' + (d.detail||'') : 'Fallo la conexion'));
+  }
+}
+
+async function viewLogs(svcId, svcName) {
+  const viewer = document.getElementById('logViewer');
+  viewer.style.display = 'block';
+  document.getElementById('logTitle').textContent = 'Logs — ' + svcName;
+  document.getElementById('logContent').textContent = 'Cargando...';
+  const d = await apiFetch('/api/services/' + svcId + '/logs?lines=100');
+  if (d) {
+    document.getElementById('logContent').textContent = d.logs || '(sin logs)';
+    document.getElementById('logContent').scrollTop = document.getElementById('logContent').scrollHeight;
+  } else {
+    document.getElementById('logContent').textContent = 'Error cargando logs';
+  }
+}
+
+function closeLogViewer() {
+  document.getElementById('logViewer').style.display = 'none';
 }
 
 </script>

@@ -515,6 +515,7 @@ def get_registration_handler() -> ConversationHandler:
             CommandHandler("cancelar", cancel),
         ],
         conversation_timeout=300,
+        allow_reentry=True,
     )
 
 

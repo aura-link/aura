@@ -405,6 +405,11 @@ async def _handle_callback(update, context):
         await plan_change.handle_planchange_callback(update, context)
         return
 
+    # Deep link registration confirmation
+    if data == "deeplink_confirm":
+        await start.handle_deeplink_confirm(update, context)
+        return
+
     # Registration support escalation
     if data == "reg_soporte":
         await _handle_reg_soporte(update, context)
