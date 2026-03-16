@@ -17,6 +17,13 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 log = logging.getLogger("admin-portal")
 
 # ---------------------------------------------------------------------------
+# SSL context for internal UISP requests (self-signed cert)
+# ---------------------------------------------------------------------------
+_ssl_ctx = ssl.create_default_context()
+_ssl_ctx.check_hostname = False
+_ssl_ctx.verify_mode = ssl.CERT_NONE
+
+# ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
 ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "auralink-admin-2026")
@@ -102,7 +109,7 @@ def _uisp_headers():
 async def _get(url: str) -> list | dict | None:
     global _session
     if _session is None or _session.closed:
-        conn = aiohttp.TCPConnector(ssl=False)
+        conn = aiohttp.TCPConnector(ssl=_ssl_ctx)
         _session = aiohttp.ClientSession(connector=conn)
     try:
         async with _session.get(url, headers=_uisp_headers(), timeout=aiohttp.ClientTimeout(total=15)) as r:
@@ -199,15 +206,43 @@ async def get_escalations() -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# Auth middleware
+# Auth middleware with rate limiting
 # ---------------------------------------------------------------------------
+_auth_fails: dict[str, list[float]] = {}
+_AUTH_MAX_FAILS = 10
+_AUTH_WINDOW = 300  # 5 minutes
+
+
 @web.middleware
 async def auth_middleware(request, handler):
     if request.path.startswith("/api/"):
+        peer = request.remote or "unknown"
+        # Check rate limit
+        now = time.time()
+        fails = _auth_fails.get(peer, [])
+        fails = [t for t in fails if now - t < _AUTH_WINDOW]
+        _auth_fails[peer] = fails
+        if len(fails) >= _AUTH_MAX_FAILS:
+            return web.json_response({"error": "too many failed attempts"}, status=429)
+
         token = request.headers.get("X-Admin-Token", "")
         if token != ADMIN_TOKEN:
+            fails.append(now)
+            _auth_fails[peer] = fails
             return web.json_response({"error": "unauthorized"}, status=401)
     return await handler(request)
+
+
+@web.middleware
+async def security_headers(request, handler):
+    resp = await handler(request)
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    resp.headers["X-Frame-Options"] = "DENY"
+    resp.headers["X-XSS-Protection"] = "1; mode=block"
+    resp.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    if request.secure:
+        resp.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    return resp
 
 
 # ---------------------------------------------------------------------------
@@ -775,17 +810,15 @@ async def api_backup_create(request):
 
     date_str = datetime.date.today().isoformat()
     fname = f"backup-{date_str}"
-    ssh_opts = "-o StrictHostKeyChecking=no -o ConnectTimeout=10"
     host = dev["host"]
     user = dev["user"]
 
     # 1. Run backup on MikroTik
-    cmd = (
-        f"ssh {ssh_opts} {user}@{host} "
-        f"'/system backup save name={fname} dont-encrypt=yes; /export file={fname}'"
-    )
-    proc = await asyncio.create_subprocess_shell(
-        cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+    proc = await asyncio.create_subprocess_exec(
+        "ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=10",
+        f"{user}@{host}",
+        f"/system backup save name={fname} dont-encrypt=yes; /export file={fname}",
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
     )
     stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
 
@@ -801,9 +834,10 @@ async def api_backup_create(request):
 
     pulled = []
     for ext in (".backup", ".rsc"):
-        scp_cmd = f"scp {ssh_opts} {user}@{host}:{fname}{ext} {bdir}/{fname}{ext}"
-        scp_proc = await asyncio.create_subprocess_shell(
-            scp_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+        scp_proc = await asyncio.create_subprocess_exec(
+            "scp", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=10",
+            f"{user}@{host}:{fname}{ext}", f"{bdir}/{fname}{ext}",
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
         )
         await asyncio.wait_for(scp_proc.communicate(), timeout=30)
         if (bdir / f"{fname}{ext}").exists():
@@ -841,7 +875,12 @@ MANAGED_SERVICES = {
 
 
 async def _run_ssh_cmd(cmd: str, timeout: int = 30) -> tuple[int, str, str]:
-    """Run a command via shell. Returns (returncode, stdout, stderr)."""
+    """Run a command via shell. Returns (returncode, stdout, stderr).
+
+    Note: Uses create_subprocess_shell intentionally — callers pass hardcoded
+    docker/compose commands (no user input), and the commands use shell features
+    like 2>&1 redirection and {{}} template syntax.
+    """
     proc = await asyncio.create_subprocess_shell(
         cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
     )
@@ -925,7 +964,7 @@ async def api_service_logs(request):
 async def on_startup(app):
     await init_admin_db()
     global _session
-    conn = aiohttp.TCPConnector(ssl=False)
+    conn = aiohttp.TCPConnector(ssl=_ssl_ctx)
     _session = aiohttp.ClientSession(connector=conn)
     log.info("Admin portal started on port %d", PORT)
 
@@ -937,7 +976,7 @@ async def on_cleanup(app):
 
 
 def create_app():
-    app = web.Application(middlewares=[auth_middleware])
+    app = web.Application(middlewares=[security_headers, auth_middleware])
 
     # API routes
     app.router.add_get("/api/dashboard", api_dashboard)

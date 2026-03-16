@@ -28,7 +28,7 @@ Migración de UISP desde servidor local (laptop 10.1.1.254) a VPS en la nube (Co
 ### VPS - UISP Cloud
 - **IP**: 217.216.85.65 (Contabo)
 - **DNS**: server.auralink.link → 217.216.85.65
-- **Contabo login**: auralinkclientes@gmail.com / f8FWcAgJFQ8GeZAG (contraseña VPS root: IWQ240f8)
+- **Contabo login**: ver credenciales en archivo local seguro (NO en git)
 - **OS**: Debian/Ubuntu con Docker
 - **UISP**: v3.0.159 (Docker containers, updated 2026-03-01 from v3.0.151)
 - **SSH**: `ssh vps` (root, key auth configurado)
@@ -47,13 +47,13 @@ Migración de UISP desde servidor local (laptop 10.1.1.254) a VPS en la nube (Co
 
 ### Servidor Aura (local)
 - **IP**: 10.147.17.155
-- **User**: aura (sudo password: 1234)
+- **User**: aura (sudo, key auth via ProxyJump)
 - **SSH**: `ssh aura` (key auth via ProxyJump por VPS)
 - **Rol**: Jump host para acceder a antenas
 
 ### MikroTik Balanceador
 - **IP**: 10.147.17.11
-- **User**: admin (password: 1234)
+- **User**: admin (key auth via VPS jump)
 - **SSH**: `ssh vps "ssh -o StrictHostKeyChecking=no admin@10.147.17.11 '...'"` (via VPS jump)
 - **Modelo**: RB5009UG+S+ (RouterOS 7.19.2 stable)
 - **Función**: PPPoE server, PCC load balancing con múltiples WANs
@@ -79,14 +79,14 @@ Migración de UISP desde servidor local (laptop 10.1.1.254) a VPS en la nube (Co
 
 ### MikroTik La Gloria
 - **IP**: 10.144.247.27
-- **User**: admin (password: Izan2021)
+- **User**: admin (credenciales en archivo local seguro)
 
 ### Antenas Ubiquiti (clientes)
 - **Rango IP**: 10.10.1.x/24 (asignado por PPPoE)
 - **Gateway**: 10.10.0.1 (MikroTik)
 - **Firmware**: XW.v6.3.24 (mayoría, actualizado 2026-02-17) / XW.v6.2.0 (algunas pendientes)
 - **OpenSSL**: 1.0.0 (libssl.so.1.0.0)
-- **Credenciales SSH**: ubnt/Auralink2021 o AURALINK/Auralink2021 o ubnt/Casimposible*7719Varce*1010
+- **Credenciales SSH**: ver archivo local seguro (3 combinaciones user/pass)
 - **SSH requiere**: `-o HostKeyAlgorithms=+ssh-rsa -o PubkeyAcceptedAlgorithms=+ssh-rsa`
 - **Total Ubiquiti en PPP**: 184
 - **Total en UISP**: 204 autorizados (203 conectados, 1 desconectado — incluye infraestructura)
@@ -99,9 +99,9 @@ Migración de UISP desde servidor local (laptop 10.1.1.254) a VPS en la nube (Co
 
 ### ZeroTier - Red BalanceadorTomatlan
 - **Network ID**: 9f77fc393ecd131f
-- **API Token**: A4ZIMEclLHgZ4coje9hQFqQWfdwYUdJH (nombre: Claude-Code)
+- **API Token**: en archivo local seguro (nombre: Claude-Code)
 - **API Base**: `https://api.zerotier.com/api/v1/`
-- **Auth header**: `Authorization: token A4ZIMEclLHgZ4coje9hQFqQWfdwYUdJH`
+- **Auth header**: `Authorization: token <ver archivo local seguro>`
 - **Rutas managed**: `10.10.1.0/24 via 10.147.17.11`, `10.1.1.0/24 via 10.147.17.11`, `10.147.17.0/24` (directo)
 - **Ruta MikroTik estática**: `217.216.85.65/32 via 10.147.17.92` — asegura que todo tráfico de antenas al VPS pase por ZeroTier (bypass PCC)
 - **9 miembros**: Asus LAP (.101), VPS (.92), Servidor Aura (.155), Nuevo Servidor UISP (.243), Server UISP viejo (.73), GenesisPRO (.220), S24 (.120), Yesswera (.16), sin nombre (.91)
@@ -121,7 +121,7 @@ Migración de UISP desde servidor local (laptop 10.1.1.254) a VPS en la nube (Co
 
 ### Connection String UISP
 ```
-wss://server.auralink.link:443+sBRaeWB1kiH4cxBIWmBTEyuxIIeULvidfT3s7UXpR2ZbapIV+allowUntrustedCertificate
+wss://server.auralink.link:443+<UISP_MASTER_KEY>+allowUntrustedCertificate
 ```
 **Nota**: El flag correcto es `+allowUntrustedCertificate`, NO `+allowSelfSignedCertificate`. UISP v3.0.151 tenía un bug que mostraba el flag incorrecto en la UI — corregido manualmente en 4 archivos del contenedor `unms-api` (ver Problema #16). Tras actualizaciones de UISP, verificar que no regrese el bug.
 
@@ -183,7 +183,7 @@ wss://server.auralink.link:443+sBRaeWB1kiH4cxBIWmBTEyuxIIeULvidfT3s7UXpR2ZbapIV+
 **Síntomas**: Logs mostraban `"Decryption failed for device MAC using master key"` en los contenedores `app-device-ws-*`. Las antenas estaban en PPPoE (internet funcionaba) pero NO aparecían en UISP.
 
 **Solución aplicada**:
-1. Actualizar `system.cfg` en cada antena: reemplazar toda la URI con `wss://server.auralink.link:443+sBRaeWB1kiH4cxBIWmBTEyuxIIeULvidfT3s7UXpR2ZbapIV+allowUntrustedCertificate`
+1. Actualizar `system.cfg` en cada antena: reemplazar toda la URI con `wss://server.auralink.link:443+<UISP_MASTER_KEY>+allowUntrustedCertificate`
 2. Guardar a flash: `cfgmtd -w -p /etc/`
 3. Eliminar entradas fantasma de la BD: `DELETE FROM unms.device WHERE (name IS NULL OR name = '') AND ip IS NULL AND connected = false AND authorized = false;`
 4. Reiniciar udapi-bridge (matar proceso hijo)
@@ -254,7 +254,7 @@ SCRIPT
 
 **Causa raíz**: Al eliminar dispositivos fantasma de la BD de UISP, se borraban las device-specific keys almacenadas del lado del servidor. Pero las antenas conservaban esas keys (terminan en `AAAAA`) en su `system.cfg`. Al reconectar:
 1. La antena encripta con su device-specific key vieja
-2. UISP no tiene esa key → intenta master key `sBRaeWB1kiH4cxBIWmBTEyuxIIeULvidfT3s7UXpR2ZbapIV`
+2. UISP no tiene esa key → intenta master key `<UISP_MASTER_KEY>`
 3. No coincide → "Decryption failed" → la antena reintenta en ~2 min → loop infinito
 
 **6 MACs ofensoras identificadas:**
@@ -283,8 +283,8 @@ SCRIPT
 **Cómo arreglar una antena específica**:
 ```bash
 # 1. SSH a la antena y resetear key
-sshpass -p "Auralink2021" ssh [SSH_OPTS] ubnt@IP "
-sed -i 's|unms.uri=.*|unms.uri=wss://server.auralink.link:443+sBRaeWB1kiH4cxBIWmBTEyuxIIeULvidfT3s7UXpR2ZbapIV+allowUntrustedCertificate|' /tmp/system.cfg
+sshpass -p "<PASSWORD>" ssh [SSH_OPTS] ubnt@IP "
+sed -i 's|unms.uri=.*|unms.uri=wss://server.auralink.link:443+<UISP_MASTER_KEY>+allowUntrustedCertificate|' /tmp/system.cfg
 cfgmtd -w -p /etc/
 rm -f /tmp/running.cfg
 killall -9 udapi-bridge"
@@ -305,7 +305,7 @@ killall -9 udapi-bridge"
 # 1. Limpiar known_hosts (host keys cambian tras reboot)
 ssh-keygen -f /root/.ssh/known_hosts -R <IP>
 # 2. Reset a master key + guardar + recrear running.cfg + restart
-sed -i "s|unms.uri=.*|unms.uri=wss://server.auralink.link:443+sBRaeWB1kiH4cxBIWmBTEyuxIIeULvidfT3s7UXpR2ZbapIV+allowUntrustedCertificate|" /tmp/system.cfg
+sed -i "s|unms.uri=.*|unms.uri=wss://server.auralink.link:443+<UISP_MASTER_KEY>+allowUntrustedCertificate|" /tmp/system.cfg
 cfgmtd -w -p /etc/
 rm -f /tmp/running.cfg && cp /tmp/system.cfg /tmp/running.cfg
 killall -9 udapi-bridge
@@ -441,7 +441,7 @@ cfgmtd -w -p /etc/
 **Causa raíz**: Device-specific keys huérfanas (terminan en AAAAA) en `system.cfg` de las antenas, sin matching key en la BD de UISP (fueron limpiadas en sesiones anteriores). La antena encriptaba con key vieja, UISP hacía key exchange pero los RPC requests timeouted.
 
 **Solución**:
-1. Reset URI en system.cfg a master key: `sBRaeWB1kiH4cxBIWmBTEyuxIIeULvidfT3s7UXpR2ZbapIV`
+1. Reset URI en system.cfg a master key: `<UISP_MASTER_KEY>`
 2. `cfgmtd -w -p /etc/` (guardar a flash)
 3. `rm -f /tmp/running.cfg && cp /tmp/system.cfg /tmp/running.cfg`
 4. `killall -9 udapi-bridge`
@@ -872,7 +872,7 @@ Sistema de captive portal para avisos a clientes con verificacion de registro en
 | `aura-bot/src/bot/handlers/avisos_admin.py` | /aviso, /registrados, scheduler, auto-dismiss |
 
 **Config portal (docker-compose.yml):**
-- `ADMIN_TOKEN=auralink-avisos-2026`
+- `ADMIN_TOKEN=<token en .env>`
 - `BOT_DB_PATH=/app/botdata/aura.db`
 - Volumes: `/root/.ssh:/root/.ssh:ro`, `./data:/app/data`, `/root/aura-bot/data:/app/botdata:ro`
 
@@ -1060,7 +1060,7 @@ Cuando un cliente es suspendido, al intentar navegar ve una página de aviso en 
 **Enlace PtP AP Tomatlan-Colmena ↔ ST Colmenares optimizado (2026-02-18 noche):**
 - Equipos: 2x Rocket 5AC Lite con dishes 34 dBi, distancia 10 km
 - IPs: AP 10.1.1.253, Station 10.1.1.252
-- Credenciales: AURALINK / Auralink2021
+- Credenciales: ver archivo local seguro
 - Cambios aplicados: PTMP → PtP, 40 MHz → 80 MHz, deshabilitado 11ac/11n compat
 - Frecuencia cambió automáticamente de 5905 a 5830 MHz (DFS)
 - Resultados: TX rate +93% (243→468 Mbps), downlink capacity +88% (132→248 Mbps), CPU AP -23% (84→61%), latencia 10ms→0ms
@@ -1269,13 +1269,8 @@ Solo los 4 planes principales reciben avisos automaticos de cobranza y suspensio
 
 ## Datos bancarios para cobranza
 
-- **Banco**: BBVA Bancomer
-- **Titular**: Carlos Eduardo Valenzuela Rios
-- **Cuenta**: 285 958 9260
-- **Tarjeta**: 4152 3144 8622 9639
-- **CLABE**: 012 400 02859589260 7
-
-Estos datos se envian automaticamente en los recordatorios (dia 3), advertencia (dia 7) y aviso de suspension (dia 8).
+Datos bancarios almacenados en archivo local seguro y en el bot (.env).
+Se envían automaticamente en los recordatorios (dia 3), advertencia (dia 7) y aviso de suspension (dia 8).
 
 ## Estado Actual (2026-03-03)
 - **219 dispositivos** en UISP: **189 conectados**, ~24 desconectados autorizados, 35 phantoms eliminados hoy

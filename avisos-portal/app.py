@@ -15,7 +15,15 @@ import sqlite3
 from html import escape
 from pathlib import Path
 
+import re
+
 from aiohttp import web
+
+_IP_RE = re.compile(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$")
+
+
+def _valid_ip(ip: str) -> bool:
+    return bool(_IP_RE.match(ip))
 
 MIKROTIK_IP = "10.147.17.11"
 MIKROTIK_USER = "admin"
@@ -132,13 +140,14 @@ def _check_registered(ppp_name: str) -> bool:
 
 async def _get_ppp_name(client_ip: str) -> str | None:
     """Get PPPoE secret name for a client IP via MikroTik SSH (terse output)."""
-    cmd = (
-        f"ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -o BatchMode=yes "
-        f"{MIKROTIK_USER}@{MIKROTIK_IP} /ppp/active/print\\ terse\\ where\\ address={client_ip}"
-    )
+    if not _valid_ip(client_ip):
+        return None
+    mk_cmd = f"/ppp/active/print terse where address={client_ip}"
     try:
-        proc = await asyncio.create_subprocess_shell(
-            cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        proc = await asyncio.create_subprocess_exec(
+            "ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=5",
+            "-o", "BatchMode=yes", f"{MIKROTIK_USER}@{MIKROTIK_IP}", mk_cmd,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
         )
         stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=10)
         if proc.returncode == 0:
@@ -152,14 +161,14 @@ async def _get_ppp_name(client_ip: str) -> str | None:
 
 async def _remove_from_avisos(client_ip: str) -> bool:
     """Remove client IP from avisos address-list only."""
-    cmd = (
-        f"ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -o BatchMode=yes "
-        f"{MIKROTIK_USER}@{MIKROTIK_IP} "
-        f'"/ip firewall address-list remove [find where list=avisos address={client_ip}]"'
-    )
+    if not _valid_ip(client_ip):
+        return False
+    mk_cmd = f"/ip firewall address-list remove [find where list=avisos address={client_ip}]"
     try:
-        proc = await asyncio.create_subprocess_shell(
-            cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        proc = await asyncio.create_subprocess_exec(
+            "ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=5",
+            "-o", "BatchMode=yes", f"{MIKROTIK_USER}@{MIKROTIK_IP}", mk_cmd,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
         )
         await asyncio.wait_for(proc.communicate(), timeout=10)
         return proc.returncode == 0
@@ -171,19 +180,19 @@ async def _temp_dismiss_24h(client_ip: str, ppp_name: str | None) -> bool:
     """Remove from avisos and add to avisos-visto permanently.
     The bot's aviso scheduler clears avisos-visto every 3 days when re-publishing,
     so clients will see the aviso again on the next cycle. Permanent entries survive reboots."""
-    comment = ppp_name or ""
-    mk_script = (
+    if not _valid_ip(client_ip):
+        return False
+    comment = re.sub(r'[^a-zA-Z0-9_. -]', '', ppp_name or "")
+    mk_cmd = (
         f'/ip firewall address-list remove [find where list=avisos address={client_ip}]; '
         f'/ip firewall address-list remove [find where list=avisos-visto address={client_ip}]; '
         f'/ip firewall address-list add list=avisos-visto address={client_ip} comment="{comment}"'
     )
-    cmd = (
-        f"ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -o BatchMode=yes "
-        f'{MIKROTIK_USER}@{MIKROTIK_IP} "{mk_script}"'
-    )
     try:
-        proc = await asyncio.create_subprocess_shell(
-            cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        proc = await asyncio.create_subprocess_exec(
+            "ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=5",
+            "-o", "BatchMode=yes", f"{MIKROTIK_USER}@{MIKROTIK_IP}", mk_cmd,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
         )
         await asyncio.wait_for(proc.communicate(), timeout=15)
         return proc.returncode == 0
@@ -195,19 +204,19 @@ async def _temp_dismiss_5min(client_ip: str, ppp_name: str | None) -> bool:
     """Remove from avisos and add to avisos-visto with 5-minute timeout.
     Dynamic entry (flag D) that auto-expires after 5 min.
     When it expires, populate-avisos re-adds the client on its next cycle."""
-    comment = ppp_name or ""
-    mk_script = (
+    if not _valid_ip(client_ip):
+        return False
+    comment = re.sub(r'[^a-zA-Z0-9_. -]', '', ppp_name or "")
+    mk_cmd = (
         f'/ip firewall address-list remove [find where list=avisos address={client_ip}]; '
         f'/ip firewall address-list remove [find where list=avisos-visto address={client_ip}]; '
         f'/ip firewall address-list add list=avisos-visto address={client_ip} timeout=00:05:00 comment="{comment}"'
     )
-    cmd = (
-        f"ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -o BatchMode=yes "
-        f'{MIKROTIK_USER}@{MIKROTIK_IP} "{mk_script}"'
-    )
     try:
-        proc = await asyncio.create_subprocess_shell(
-            cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        proc = await asyncio.create_subprocess_exec(
+            "ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=5",
+            "-o", "BatchMode=yes", f"{MIKROTIK_USER}@{MIKROTIK_IP}", mk_cmd,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
         )
         await asyncio.wait_for(proc.communicate(), timeout=15)
         return proc.returncode == 0
@@ -217,18 +226,18 @@ async def _temp_dismiss_5min(client_ip: str, ppp_name: str | None) -> bool:
 
 async def _permanent_dismiss(client_ip: str, ppp_name: str | None) -> bool:
     """Remove from avisos and add to avisos-visto (permanent dismiss)."""
-    comment = ppp_name if ppp_name else ""
-    mk_script = (
+    if not _valid_ip(client_ip):
+        return False
+    comment = re.sub(r'[^a-zA-Z0-9_. -]', '', ppp_name or "")
+    mk_cmd = (
         f'/ip firewall address-list remove [find where list=avisos address={client_ip}]; '
         f'/ip firewall address-list add list=avisos-visto address={client_ip} comment="{comment}"'
     )
-    cmd = (
-        f"ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -o BatchMode=yes "
-        f'{MIKROTIK_USER}@{MIKROTIK_IP} "{mk_script}"'
-    )
     try:
-        proc = await asyncio.create_subprocess_shell(
-            cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        proc = await asyncio.create_subprocess_exec(
+            "ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=5",
+            "-o", "BatchMode=yes", f"{MIKROTIK_USER}@{MIKROTIK_IP}", mk_cmd,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
         )
         await asyncio.wait_for(proc.communicate(), timeout=15)
         return proc.returncode == 0
@@ -1361,17 +1370,16 @@ async def dismiss_temp(request):
         ppp_name = await _get_ppp_name(client_ip)
         comment = ppp_name or ""
         # Remove from avisos + add to avisos-visto permanently (survives reboot)
+        safe_comment = re.sub(r'[^a-zA-Z0-9_. -]', '', comment)
         mk_script = (
             f'/ip firewall address-list remove [find where list=avisos address={client_ip}]; '
             f'/ip firewall address-list remove [find where list=avisos-visto address={client_ip}]; '
-            f'/ip firewall address-list add list=avisos-visto address={client_ip} comment="{comment}"'
+            f'/ip firewall address-list add list=avisos-visto address={client_ip} comment="{safe_comment}"'
         )
-        cmd = (
-            f"ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -o BatchMode=yes "
-            f'{MIKROTIK_USER}@{MIKROTIK_IP} "{mk_script}"'
-        )
-        proc = await asyncio.create_subprocess_shell(
-            cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        proc = await asyncio.create_subprocess_exec(
+            "ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=5", "-o", "BatchMode=yes",
+            f"{MIKROTIK_USER}@{MIKROTIK_IP}", mk_script,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
         )
         await asyncio.wait_for(proc.communicate(), timeout=15)
         log.info("Temp dismissed %s (%s) for 24h", ppp_name or "unknown", client_ip)
@@ -1399,14 +1407,14 @@ async def dismiss(request):
             return web.json_response({"ok": True})
 
         # Fallback: try simple remove + add
-        fallback_cmd = (
-            f"ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -o BatchMode=yes "
-            f"{MIKROTIK_USER}@{MIKROTIK_IP} "
-            f'"/ip firewall address-list remove [find where list=avisos address={client_ip}]; '
-            f'/ip firewall address-list add list=avisos-visto address={client_ip}"'
+        fallback_mk = (
+            f'/ip firewall address-list remove [find where list=avisos address={client_ip}]; '
+            f'/ip firewall address-list add list=avisos-visto address={client_ip}'
         )
-        proc = await asyncio.create_subprocess_shell(
-            fallback_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        proc = await asyncio.create_subprocess_exec(
+            "ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=5", "-o", "BatchMode=yes",
+            f"{MIKROTIK_USER}@{MIKROTIK_IP}", fallback_mk,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
         )
         await asyncio.wait_for(proc.communicate(), timeout=10)
         if proc.returncode == 0:
@@ -1484,13 +1492,11 @@ async def admin_status(request):
 # ---------------------------------------------------------------------------
 async def _get_active_ppp_sessions() -> dict[str, str]:
     """Get all active PPPoE sessions as {username: ip} using terse output."""
-    cmd = (
-        f"ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -o BatchMode=yes "
-        f"{MIKROTIK_USER}@{MIKROTIK_IP} /ppp/active/print\\ terse"
-    )
     try:
-        proc = await asyncio.create_subprocess_shell(
-            cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        proc = await asyncio.create_subprocess_exec(
+            "ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=5", "-o", "BatchMode=yes",
+            f"{MIKROTIK_USER}@{MIKROTIK_IP}", "/ppp/active/print terse",
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
         )
         stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=20)
         if proc.returncode == 0:
@@ -1512,13 +1518,11 @@ async def _get_active_ppp_sessions() -> dict[str, str]:
 
 async def _get_avisos_visto_ips() -> set[str]:
     """Get all IPs currently in avisos-visto using terse output."""
-    cmd = (
-        f"ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -o BatchMode=yes "
-        f'{MIKROTIK_USER}@{MIKROTIK_IP} "/ip firewall address-list print terse where list=avisos-visto"'
-    )
     try:
-        proc = await asyncio.create_subprocess_shell(
-            cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        proc = await asyncio.create_subprocess_exec(
+            "ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=5", "-o", "BatchMode=yes",
+            f"{MIKROTIK_USER}@{MIKROTIK_IP}", "/ip firewall address-list print terse where list=avisos-visto",
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
         )
         stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=15)
         if proc.returncode == 0:
@@ -1559,17 +1563,18 @@ def _ppp_matches_registered(ppp_name: str, registered_names: set[str]) -> bool:
 
 async def _add_to_avisos_visto(ip: str, comment: str) -> bool:
     """Add IP to avisos-visto permanently and remove from avisos."""
+    if not _valid_ip(ip):
+        return False
+    safe_comment = re.sub(r'[^a-zA-Z0-9_. -]', '', comment)
     mk_script = (
         f'/ip firewall address-list remove [find where list=avisos address={ip}]; '
-        f'/ip firewall address-list add list=avisos-visto address={ip} comment="{comment}"'
-    )
-    cmd = (
-        f"ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -o BatchMode=yes "
-        f'{MIKROTIK_USER}@{MIKROTIK_IP} "{mk_script}"'
+        f'/ip firewall address-list add list=avisos-visto address={ip} comment="{safe_comment}"'
     )
     try:
-        proc = await asyncio.create_subprocess_shell(
-            cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        proc = await asyncio.create_subprocess_exec(
+            "ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=5", "-o", "BatchMode=yes",
+            f"{MIKROTIK_USER}@{MIKROTIK_IP}", mk_script,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
         )
         await asyncio.wait_for(proc.communicate(), timeout=10)
         return proc.returncode == 0

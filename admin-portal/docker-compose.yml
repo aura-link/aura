@@ -4,13 +4,11 @@ services:
     container_name: admin-portal
     restart: unless-stopped
     network_mode: host
+    env_file:
+      - .env
     environment:
-      - ADMIN_TOKEN=auralink-admin-2026
       - BOT_DB_PATH=/app/botdata/aura.db
       - ADMIN_DB_PATH=/app/data/admin.db
-      - UISP_BASE_URL=https://server.auralink.link
-      - UISP_API_TOKEN=ViDGlWlbrRuV2j0itNL0Mvt4LOcmRTRCoLyQffMaIiaIc6eF
-      - TELEGRAM_BOT_TOKEN=8318058273:AAEiKpg6L8gG9DSb4zLrtnPUS1Z6urYe_UI
       - TZ=America/Mexico_City
     volumes:
       - ./data:/app/data

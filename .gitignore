@@ -2,6 +2,8 @@
 *.tmp
 __pycache__/
 .env
+**/.env
+
 # Sensitive
 .claude/settings.local.json
 wireguard_configs/
@@ -9,3 +11,25 @@ wireguard_configs.zip
 wireguard_oc200.conf
 backup-uisp.unms
 nul
+credencialesaccesos.txt
+credenciales_seguras.local
+*.local
+
+# Data dumps (contain client PII / operational data)
+*.json
+!**/package.json
+!**/package-lock.json
+!**/*.schema.json
+!**/docker-compose.yml
+ppp_*.txt
+uisp_*.txt
+nms_*.json
+crm_*.json
+batch*_result.json
+upgrade_*.json
+
+# Firmware binaries
+*.bin
+
+# Temp scripts
+*.rsc

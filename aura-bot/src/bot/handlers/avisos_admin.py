@@ -60,7 +60,7 @@ def _get_config():
     global AVISOS_URL, ADMIN_TOKEN
     if AVISOS_URL is None:
         AVISOS_URL = getattr(config, "AVISOS_PORTAL_URL", "http://217.216.85.65:8090")
-        ADMIN_TOKEN = getattr(config, "AVISOS_ADMIN_TOKEN", "auralink-avisos-2026")
+        ADMIN_TOKEN = getattr(config, "AVISOS_ADMIN_TOKEN", "")
 
 
 async def _portal_request(method: str, path: str, json_data: dict | None = None) -> dict | None:

@@ -4,8 +4,9 @@ services:
     container_name: avisos-portal
     restart: unless-stopped
     network_mode: host
+    env_file:
+      - .env
     environment:
-      - ADMIN_TOKEN=auralink-avisos-2026
       - BOT_DB_PATH=/app/botdata/aura.db
       - TZ=America/Mexico_City
     volumes:
